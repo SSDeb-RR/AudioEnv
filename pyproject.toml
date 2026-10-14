@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "audioenv-foundry"
+version = "0.1.0"
+description = "Audio-native, deterministic RL environments for speech-to-speech agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AudioEnv Foundry contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5"]
+qwen = ["torch>=2.4", "transformers>=4.51", "qwen-omni-utils>=0.0.8"]
+openenv = ["openenv-core"]
+verifiers = ["verifiers"]
+
+[project.scripts]
+audioenv = "audioenv.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audioenv"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
