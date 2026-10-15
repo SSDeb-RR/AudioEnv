@@ -174,6 +174,7 @@ class _VerlOmniTrainer:
         return {
             **os.environ, "AUDIOENV_VERL_PLUGIN": json.dumps(plugin, sort_keys=True),
             "AUDIOENV_VERL_ROLLOUT_FACTORY": "audioenv.training.verl_runtime:run_audioenv_trajectory",
+            "AUDIOENV_NATIVE_RUNTIME_FACTORY": "audioenv.training.qwen_tau2_runtime:run_qwen_tau2_rollout",
             "AUDIOENV_ENABLE_NATIVE_AUDIO_BRIDGE": "1",
             # VeRL imports these modules in the driver and Ray worker processes.
             # Importing AudioEnv here makes its registered integration boundaries

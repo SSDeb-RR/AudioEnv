@@ -11,13 +11,15 @@ from audioenv.training.tau2_episode import (
 
 class _Tau2:
     def __init__(self): self.events = []
-    def reset(self, task_id): self.events.append(("reset", task_id)); return {"session_id": "tau"}
+    def reset(self, task_id):
+        self.events.append(("reset", task_id))
+        return {"session_id": "tau", "tool_schemas": [{"name": "lookup"}]}
     def caller_context(self, session_id):
         self.events.append(("private", session_id)); return {"user_scenario": {"hidden": "refund A"}}
     def speak(self, session_id, role, semantic_text, *, end_episode=False):
         self.events.append(("speak", role, semantic_text, end_episode)); return {"recorded": True}
     def tool(self, session_id, name, arguments):
-        self.events.append(("tool", name, arguments)); return {"result": {"order": "A"}}
+        self.events.append(("tool", name, arguments)); return {"result": {"order": "A"}, "db_hash": "private"}
     def verify(self, session_id):
         self.events.append(("verify", session_id)); return {"upstream_reward": 1.0, "reward_info": {}}
 
@@ -51,7 +53,9 @@ def test_tau2_episode_keeps_private_goal_out_of_policy_and_uses_official_reward(
     assert [step.action.kind for step in result.steps] == ["tool", "speak", "speak"]
     assert observations[0].caller_audio == b"opening wav"
     assert observations[0].tool_result is None
+    assert observations[0].tool_schemas == ({"name": "lookup"},)
     assert observations[1].tool_result == {"result": {"order": "A"}}
+    assert "private" not in repr(observations)
     assert observations[2].caller_audio == b"reply wav"
     assert all("refund A" not in repr(item) for item in observations)
     assert json.loads(caller.private_goal)["user_scenario"]["hidden"] == "refund A"

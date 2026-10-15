@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import asyncio
 import io
 from pathlib import Path
 import wave
@@ -29,7 +30,10 @@ from audioenv.models.caller import ScriptedAudioCallerAdapter
 from audioenv.spec import SpeakAction, ToolCallAction
 from audioenv.training.audioenv_agent_loop import AudioEnvAgentLoop
 from audioenv.training.verl_omni import VerlOmniConfig, VerlOmniGRPOTrainer, VerlOmniGSPOTrainer
-from audioenv.training.verl_plugin import compute_audioenv_score, trajectory_to_verl_payload
+from audioenv.training.verl_plugin import AudioEnvVerlAgentLoop, compute_audioenv_score, trajectory_to_verl_payload
+from audioenv.training.verl_runtime import NativeVerlRollout
+from audioenv.training.qwen_tau2_runtime import _flatten_policy_rows
+from audioenv.training.verl_trajectory_bridge import finalize_native_trajectory
 
 
 HEX = "a" * 64
@@ -284,6 +288,77 @@ def test_verl_native_runtime_refuses_implicit_scripted_fallback(monkeypatch):
     monkeypatch.delenv("AUDIOENV_NATIVE_RUNTIME_FACTORY", raising=False)
     with pytest.raises(RuntimeError, match="reviewed Qwen caller/environment runtime"):
         _runtime_factory()
+
+
+def test_native_verl_rollout_preserves_audio_for_processor_derived_positions():
+    native = NativeVerlRollout(
+        prompt_ids=(1, 2), response_ids=(3, 4, 5), response_mask=(1, 0, 1),
+        response_logprobs=(-0.1, 0.0, -0.2), reward_score=1.0, num_turns=2,
+        audio_paths=("/immutable/caller-a.wav", "/immutable/caller-b.wav"),
+        mm_processor_kwargs={"sampling_rate": 16_000},
+        extra_fields={"audioenv_trusted_reward": {"terminal": 1.0}},
+    )
+
+    async def factory(**_):
+        return native
+
+    loop = AudioEnvVerlAgentLoop(rollout_factory=factory)
+    output = asyncio.run(loop.run({"temperature": 1.0}))
+    assert output["multi_modal_data"] == {"audios": list(native.audio_paths)}
+    assert output["mm_processor_kwargs"] == {"sampling_rate": 16_000}
+    assert output["response_mask"] == [1, 0, 1]
+    assert "position_ids" not in output
+
+
+def test_qwen_runtime_flattens_only_policy_tokens_into_training_mask():
+    prompt, response, mask, logprobs = _flatten_policy_rows((
+        ((10, 11), (12,), (-0.1,)),
+        ((10, 11, 12, 20, 21), (22, 23), (-0.2, -0.3)),
+    ))
+    assert prompt == (10, 11)
+    assert response == (12, 20, 21, 22, 23)
+    assert mask == (1, 0, 0, 1, 1)
+    assert logprobs == (-0.1, 0.0, 0.0, -0.2, -0.3)
+
+    with pytest.raises(RuntimeError, match="append-only"):
+        _flatten_policy_rows((((1,), (2,), (-0.1,)), ((9,), (3,), (-0.2,))))
+
+
+def test_verl_postprocessing_finalizes_real_multichannel_positions(tmp_path: Path):
+    import torch
+
+    audio_path = tmp_path / "caller.wav"
+    audio_path.write_bytes(_wav())
+    draft = {
+        "schema_version": "audioenv.native-rollout-draft/v1",
+        "experiment_id": "exp", "environment_hash": "a" * 64,
+        "verifier_hash": "b" * 64, "reward_version": "tau2-v1",
+        "task_id": "0", "episode_id": "episode", "seed": 7,
+        "model_id": "qwen", "checkpoint_id": "base", "policy_version": "p1",
+        "terminal_reward": 1.0, "process_reward": 0.0,
+        "truncated": False, "truncation_reason": None,
+        "audio_paths": [str(audio_path)], "actions": [{"kind": "tool"}],
+    }
+    # Two left-padding positions, a two-token prompt, then three response slots.
+    padded = torch.tensor([[
+        [90, 91, 0, 1, 2, 3, 4],
+        [90, 91, 10, 11, 12, 13, 14],
+        [90, 91, 20, 21, 22, 23, 24],
+        [90, 91, 30, 31, 32, 33, 34],
+    ]])
+    trace = finalize_native_trajectory(
+        draft=draft, prompt_ids=(99, 99, 2), response_ids=(3, 4, 5),
+        response_mask=(1, 0, 1), response_logprobs=(-0.1, 0.0, -0.2),
+        padded_position_ids=padded, prompt_width=4, audio_token_id=99,
+    )
+    assert trace.terminal_reward == 1 and trace.done
+    assert trace.turns[0].position_ids == (
+        (91, 0, 1, 2, 3, 4), (91, 10, 11, 12, 13, 14),
+        (91, 20, 21, 22, 23, 24), (91, 30, 31, 32, 33, 34),
+    )
+    assert trace.turns[0].response_mask == (1, 0, 1)
+    assert trace.turns[0].multimodal_features[0].start_token == 0
+    assert trace.turns[0].multimodal_features[0].end_token == 2
 
 
 class _RunPodTransport:

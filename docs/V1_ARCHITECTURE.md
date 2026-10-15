@@ -136,6 +136,15 @@ multi-channel RoPE positions. AudioEnv binds those positions to persisted
 training records and must never substitute flat synthetic positions for a
 native Qwen rollout.
 
+The runtime therefore returns `NativeVerlRollout`, not a prematurely finalized
+trajectory. It contains the initial prompt, the append-only response stream,
+policy-only mask, sampled-token log-probabilities, caller audio paths, and a
+public trace draft. After VeRL pads the sequence and invokes the loaded Qwen
+processor, an AudioEnv postprocessing bridge selects the unpadded real RoPE
+positions, locates exact audio-token spans, records caller and Talker WAV
+lineage, and validates the resulting `TrajectoryV2` before it enters the
+training batch and artifact stream.
+
 ## Persistence and lifecycle
 
 Relational storage contains projects, registries, immutable experiment hashes

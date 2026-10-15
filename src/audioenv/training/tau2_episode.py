@@ -8,6 +8,7 @@ the episode result or policy observation.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 from typing import Any, Awaitable, Callable, Protocol
@@ -32,6 +33,7 @@ class PolicyObservation:
     caller_audio: bytes
     tool_result: dict[str, Any] | None
     turn_index: int
+    tool_schemas: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,17 +82,23 @@ class Tau2NativeEpisodeController:
         self.tau2, self.caller, self.max_turns = tau2, caller, max_turns
 
     async def run(self, task_id: str, seed: int, generate: PolicyGenerate) -> Tau2EpisodeResult:
-        reset = self.tau2.reset(task_id)
+        reset = await asyncio.to_thread(self.tau2.reset, task_id)
         tau2_session = _required_string(reset, "session_id")
-        private = self.tau2.caller_context(tau2_session)
+        raw_tools = reset.get("tool_schemas") or ()
+        if not isinstance(raw_tools, (list, tuple)) or any(not isinstance(item, dict) for item in raw_tools):
+            raise ValueError("tau2 reset returned invalid tool schemas")
+        tool_schemas = tuple(raw_tools)
+        private = await asyncio.to_thread(self.tau2.caller_context, tau2_session)
         # The complete object is serialized only across the caller-only port.
         # No copy is retained in the result or passed to ``generate``.
-        opened = self.caller.create(json.dumps(private, sort_keys=True, separators=(",", ":")), seed)
+        opened = await asyncio.to_thread(
+            self.caller.create, json.dumps(private, sort_keys=True, separators=(",", ":")), seed,
+        )
         caller_session = _required_string(opened, "session_id")
         caller_audio = _audio(opened)
         caller_text = str(opened.get("semantic_text") or "").strip()
         if caller_text:
-            self.tau2.speak(tau2_session, "user", caller_text)
+            await asyncio.to_thread(self.tau2.speak, tau2_session, "user", caller_text)
 
         steps: list[EpisodeStep] = []
         tool_result = None
@@ -98,31 +106,35 @@ class Tau2NativeEpisodeController:
         reason = None
         try:
             for index in range(1, self.max_turns + 1):
-                produced = generate(PolicyObservation(caller_audio, tool_result, index))
+                produced = generate(PolicyObservation(caller_audio, tool_result, index, tool_schemas))
                 turn = await produced if hasattr(produced, "__await__") else produced
                 if not isinstance(turn, PolicyTurn):
                     raise TypeError("policy generator must return PolicyTurn")
                 action = parse_episode_action(turn.semantic_text)
                 if action.kind == "tool":
-                    tool_result = self.tau2.tool(
+                    raw_tool_result = await asyncio.to_thread(
+                        self.tau2.tool,
                         tau2_session, action.tool_name or "", action.tool_arguments or {},
                     )
+                    # Worker diagnostics such as the database hash are useful
+                    # for traces but are not a tool observation for the model.
+                    tool_result = _public_tool_result(raw_tool_result)
                 elif action.kind == "speak":
                     if not turn.audio:
                         raise ValueError("spoken policy action requires bound native audio")
-                    self.tau2.speak(
-                        tau2_session, "assistant", action.semantic_text,
+                    await asyncio.to_thread(
+                        self.tau2.speak, tau2_session, "assistant", action.semantic_text,
                         end_episode=action.terminate,
                     )
                     tool_result = None
                     if action.terminate:
                         terminated = True
                     else:
-                        response = self.caller.respond(caller_session, turn.audio)
+                        response = await asyncio.to_thread(self.caller.respond, caller_session, turn.audio)
                         caller_audio = _audio(response)
                         caller_text = str(response.get("semantic_text") or "").strip()
                         if caller_text:
-                            self.tau2.speak(tau2_session, "user", caller_text)
+                            await asyncio.to_thread(self.tau2.speak, tau2_session, "user", caller_text)
                 else:
                     raise AssertionError("unreachable action kind")
                 steps.append(EpisodeStep(index, action, turn.metadata, tool_result))
@@ -130,9 +142,9 @@ class Tau2NativeEpisodeController:
                     break
             else:
                 reason = "max_turns"
-            verification = self.tau2.verify(tau2_session)
+            verification = await asyncio.to_thread(self.tau2.verify, tau2_session)
         finally:
-            self.caller.delete(caller_session)
+            await asyncio.to_thread(self.caller.delete, caller_session)
         return Tau2EpisodeResult(
             task_id=task_id, steps=tuple(steps), verification=verification,
             terminal_reward=float(verification.get("upstream_reward", 0.0)),
@@ -187,3 +199,9 @@ def _audio(payload: dict[str, Any]) -> bytes:
     if not decoded:
         raise ValueError("caller response contains empty audio")
     return decoded
+
+
+def _public_tool_result(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict) or "result" not in payload:
+        raise ValueError("tau2 tool response is missing its public result")
+    return {"result": payload["result"]}

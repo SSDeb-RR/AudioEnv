@@ -53,6 +53,7 @@ class RetailWorker:
                 "session_id": session_id,
                 "task_id": task.id,
                 "tool_names": [tool.name for tool in environment.get_tools()],
+                "tool_schemas": [_jsonable(tool) for tool in environment.get_tools()],
                 "initial_db_hash": environment.get_db_hash(),
             }
         if operation == "caller_context":

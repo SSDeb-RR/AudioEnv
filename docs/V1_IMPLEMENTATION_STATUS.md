@@ -103,8 +103,15 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   only to that caller service, passes only caller WAV and permitted tool
   results to the policy, executes strict structured tool/speech envelopes,
   records semantic turns for upstream evaluation, cleans up caller sessions,
-  and takes terminal reward from tau2's official evaluator. The remaining
-  work is the Qwen/VeRL policy port and multimodal postprocessing handoff.
+  and takes terminal reward from tau2's official evaluator.
+- The production Qwen/tau2 runtime factory now drives VeRL's live policy
+  server with native caller audio, requires sampled-token log-probabilities,
+  binds same-request Talker WAV to spoken actions, inserts tool/caller tokens
+  with training mask zero, and fails on non-append-only policy lineage. A
+  postprocessing bridge waits for VeRL's Qwen processor to calculate the real
+  four-channel multimodal RoPE positions, then creates `TrajectoryV2` with
+  exact audio-token spans and caller/agent audio lineage. This code remains
+  CUDA-unverified.
 
 ## Partial
 
@@ -133,10 +140,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   pinned VeRL `AgentLoopBase` when loaded in the CUDA worker, converts an
   append-only `TrajectoryV2` into VeRL's exact prompt/response/mask/log-prob
   output, and masks caller/tool observation tokens to zero. It refuses an
-  implicit scripted fallback. The frozen Qwen caller service is implemented,
-  but the reviewed tau2 episode runtime that drives VeRL's live policy server
-  and hands native multimodal inputs back for processor-derived RoPE positions
-  is still not implemented. This loop has not run inside the GPU worker.
+  implicit scripted fallback. The frozen caller, tau2 episode controller,
+  live-policy runtime factory, and processor-derived trajectory finalizer are
+  implemented and locally contract-tested. The complete loop has not yet run
+  inside the pinned CUDA worker, and its seed dataset still must supply all
+  hash-bound runtime metadata.
 - RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
   runtime/budget stops, reconnect, and SFTP command construction. Live API,
   SSH event streaming, and artifact collection are not verified.
@@ -164,7 +172,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-94 passed
+97 passed
 
 uv run audioenv validate
 389 passed, 0 failed

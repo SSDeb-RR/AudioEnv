@@ -13,11 +13,14 @@ import os
 from typing import Any, Callable
 
 from ..contracts import TrajectoryV2
+from .verl_runtime import NativeVerlRollout
 
 if os.environ.get("AUDIOENV_ENABLE_NATIVE_AUDIO_BRIDGE") == "1":
     from .vllm_audio_bridge import install_native_audio_bridge
+    from .verl_trajectory_bridge import install_trajectory_finalize_bridge
 
     install_native_audio_bridge()
+    install_trajectory_finalize_bridge()
 
 try:  # Imported only inside the pinned CUDA worker environment.
     from verl.experimental.agent_loop.agent_loop import (
@@ -173,16 +176,30 @@ class AudioEnvVerlAgentLoop(_VerlAgentLoopBase):
         trajectory = await self.rollout_factory(
             agent_loop=self, sampling_params=sampling_params, **kwargs,
         )
-        if not isinstance(trajectory, TrajectoryV2):
-            raise TypeError("AudioEnv VeRL rollout factory must return TrajectoryV2")
-        payload = trajectory_to_verl_payload(trajectory)
+        if isinstance(trajectory, TrajectoryV2):
+            payload = trajectory_to_verl_payload(trajectory)
+            multi_modal_data = None
+            mm_processor_kwargs = None
+        elif isinstance(trajectory, NativeVerlRollout):
+            payload = VerlAgentLoopPayload(
+                prompt_ids=trajectory.prompt_ids, response_ids=trajectory.response_ids,
+                response_mask=trajectory.response_mask,
+                response_logprobs=trajectory.response_logprobs,
+                reward_score=trajectory.reward_score, num_turns=trajectory.num_turns,
+                extra_fields=trajectory.extra_fields,
+            )
+            multi_modal_data = {"audios": list(trajectory.audio_paths)}
+            mm_processor_kwargs = trajectory.mm_processor_kwargs
+        else:
+            raise TypeError("AudioEnv VeRL rollout factory must return TrajectoryV2 or NativeVerlRollout")
         if _VerlAgentLoopOutput is None:
             return {
                 "prompt_ids": list(payload.prompt_ids), "response_ids": list(payload.response_ids),
                 "response_mask": list(payload.response_mask),
                 "response_logprobs": list(payload.response_logprobs),
                 "reward_score": payload.reward_score, "num_turns": payload.num_turns,
-                "extra_fields": payload.extra_fields,
+                "extra_fields": payload.extra_fields, "multi_modal_data": multi_modal_data,
+                "mm_processor_kwargs": mm_processor_kwargs,
             }
         return _VerlAgentLoopOutput(
             prompt_ids=list(payload.prompt_ids), response_ids=list(payload.response_ids),
@@ -190,4 +207,5 @@ class AudioEnvVerlAgentLoop(_VerlAgentLoopBase):
             response_logprobs=list(payload.response_logprobs),
             reward_score=payload.reward_score, num_turns=payload.num_turns,
             metrics=_VerlAgentLoopMetrics(), extra_fields=payload.extra_fields,
+            multi_modal_data=multi_modal_data, mm_processor_kwargs=mm_processor_kwargs,
         )

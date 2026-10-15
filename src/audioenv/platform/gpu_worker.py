@@ -156,6 +156,7 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
             "CUDA_VISIBLE_DEVICES": allocation.trainer,
             "AUDIOENV_CALLER_URL": caller_url,
             "AUDIOENV_TAU2_CHECKOUT": str(Path(experiment.tau2_checkout or "").resolve()),
+            "AUDIOENV_ROLLOUT_AUDIO_DIR": str((output / "rollout-audio").resolve()),
         })
         with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
             process = subprocess.Popen(command, cwd=config.checkout, env=train_environment, stdout=stdout, stderr=stderr)
