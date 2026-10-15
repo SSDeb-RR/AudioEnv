@@ -25,7 +25,14 @@ class RetailWorker:
         if operation == "probe":
             return {"protocol": PROTOCOL_VERSION, "domain": "retail", "task_count": len(self.tasks)}
         if operation == "discover":
-            split_by_id = {str(task_id): name for name, ids in self.splits.items() for task_id in ids}
+            # tau2 also publishes an aggregate ``base`` list containing every
+            # task. It is not a training split and must not overwrite the
+            # official train/test membership.
+            split_by_id = {
+                str(task_id): name
+                for name in ("train", "test")
+                for task_id in self.splits.get(name, ())
+            }
             return {"tasks": [{"id": task.id, "split": split_by_id.get(task.id, "unknown")} for task in self.tasks.values()]}
         if operation == "reset":
             task = self.tasks[str(request["task_id"])]

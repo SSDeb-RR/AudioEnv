@@ -71,9 +71,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 ## Partial
 
 - τ² retail is pinned to `fc0055dc4e0a316c3f83133267fbd6faaa770992`.
-  A Python 3.12 JSON-lines worker implements discovery, reset, tool execution,
-  and environment-state verification, but Python 3.12 is unavailable on this
-  host. Full upstream communication-reward parity is not claimed.
+  A process-owning client now runs its Python 3.12 JSON-lines worker through
+  `uv`, correlates requests, enforces deadlines, captures bounded diagnostics,
+  and terminates the process group safely. A live pinned run discovered 114
+  retail tasks, reset task `0`, exposed 16 tools, and produced a `0.0` no-op
+  environment reward. Official train/test membership is preserved instead of
+  being overwritten by the aggregate `base` list. Full upstream
+  communication-reward parity is not yet claimed.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
   alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
   export. The pinned VeRL agent-loop API and reward-loading API have been
@@ -102,7 +106,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-64 passed
+69 passed
 
 uv run audioenv validate
 341 passed, 0 failed
