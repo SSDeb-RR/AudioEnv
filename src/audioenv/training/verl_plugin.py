@@ -8,7 +8,26 @@ documented custom reward-function boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
+import os
 from typing import Any, Callable
+
+from ..contracts import TrajectoryV2
+
+try:  # Imported only inside the pinned CUDA worker environment.
+    from verl.experimental.agent_loop.agent_loop import (
+        AgentLoopBase as _VerlAgentLoopBase,
+        AgentLoopMetrics as _VerlAgentLoopMetrics,
+        AgentLoopOutput as _VerlAgentLoopOutput,
+        register as _verl_register,
+    )
+except ImportError:  # Local control-plane installs intentionally omit VeRL.
+    _VerlAgentLoopBase = object
+    _VerlAgentLoopMetrics = None
+    _VerlAgentLoopOutput = None
+
+    def _verl_register(_: str):
+        return lambda cls: cls
 
 
 @dataclass(slots=True)
@@ -58,16 +77,112 @@ def compute_audioenv_score(
     }
 
 
-class AudioEnvVerlAgentLoop:
-    def __init__(self, rollout_factory: Callable[..., Any]):
+@dataclass(frozen=True, slots=True)
+class VerlAgentLoopPayload:
+    prompt_ids: tuple[int, ...]
+    response_ids: tuple[int, ...]
+    response_mask: tuple[int, ...]
+    response_logprobs: tuple[float, ...]
+    reward_score: float
+    num_turns: int
+    extra_fields: dict[str, Any]
+
+
+def trajectory_to_verl_payload(trajectory: TrajectoryV2) -> VerlAgentLoopPayload:
+    """Convert a V2 trace into VeRL's single sequence without hiding drift.
+
+    Every later turn must extend the prior prompt plus generated action. Tokens
+    introduced by caller audio or tool results are retained with mask zero;
+    only policy-generated Thinker tokens receive mask one.
+    """
+
+    first = trajectory.turns[0]
+    prompt = tuple(first.input_ids)
+    response_ids: list[int] = []
+    response_mask: list[int] = []
+    response_logprobs: list[float] = []
+    previous_context = prompt
+    for index, turn in enumerate(trajectory.turns):
+        current = tuple(turn.input_ids)
+        if index:
+            if current[: len(previous_context)] != previous_context:
+                raise ValueError("multi-turn context is not an append-only policy lineage")
+            observation_tokens = current[len(previous_context) :]
+            response_ids.extend(observation_tokens)
+            response_mask.extend([0] * len(observation_tokens))
+            response_logprobs.extend([0.0] * len(observation_tokens))
+        response_ids.extend(turn.generated_ids)
+        response_mask.extend(turn.response_mask)
+        response_logprobs.extend(turn.rollout_logprobs)
+        previous_context = current + tuple(turn.generated_ids)
+    return VerlAgentLoopPayload(
+        prompt_ids=prompt,
+        response_ids=tuple(response_ids),
+        response_mask=tuple(response_mask),
+        response_logprobs=tuple(response_logprobs),
+        reward_score=trajectory.terminal_reward + trajectory.process_reward,
+        num_turns=len(trajectory.turns),
+        extra_fields={
+            "audioenv_trusted_reward": {
+                "terminal": trajectory.terminal_reward,
+                "process": trajectory.process_reward,
+                "reward_version": trajectory.reward_version,
+                "verifier_hash": trajectory.verifier_hash,
+            },
+            "audioenv_trajectory": trajectory.model_dump(mode="json"),
+        },
+    )
+
+
+def _load_factory(reference: str) -> Callable[..., Any]:
+    module_name, separator, attribute = reference.partition(":")
+    if not separator or not module_name or not attribute:
+        raise ValueError("rollout factory must use module:attribute syntax")
+    factory = getattr(importlib.import_module(module_name), attribute)
+    if not callable(factory):
+        raise TypeError("configured rollout factory is not callable")
+    return factory
+
+
+@_verl_register("audioenv_agent")
+class AudioEnvVerlAgentLoop(_VerlAgentLoopBase):
+    """Pinned VeRL AgentLoopBase integration loaded by external modules.
+
+    The factory executes AudioEnv's protected environment/caller loop and must
+    return ``TrajectoryV2``. It receives this loop instance so it can use the
+    pinned server manager, processor, and tokenizer rather than loading a
+    second policy. Local tests may inject a factory directly.
+    """
+
+    def __init__(self, *args, rollout_factory: Callable[..., Any] | None = None, **kwargs):
+        if _VerlAgentLoopOutput is not None:
+            super().__init__(*args, **kwargs)
         self.rollout_factory = rollout_factory
+        if self.rollout_factory is None:
+            reference = os.environ.get("AUDIOENV_VERL_ROLLOUT_FACTORY", "")
+            if not reference:
+                raise RuntimeError("AUDIOENV_VERL_ROLLOUT_FACTORY is required")
+            self.rollout_factory = _load_factory(reference)
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> dict[str, Any]:
-        trajectory = await self.rollout_factory(sampling_params=sampling_params, **kwargs)
-        return {
-            "trajectory": trajectory.model_dump(mode="json"),
-            "audioenv_trusted_reward": {
-                "terminal": trajectory.terminal_reward, "process": trajectory.process_reward,
-                "reward_version": trajectory.reward_version, "verifier_hash": trajectory.verifier_hash,
-            },
-        }
+        trajectory = await self.rollout_factory(
+            agent_loop=self, sampling_params=sampling_params, **kwargs,
+        )
+        if not isinstance(trajectory, TrajectoryV2):
+            raise TypeError("AudioEnv VeRL rollout factory must return TrajectoryV2")
+        payload = trajectory_to_verl_payload(trajectory)
+        if _VerlAgentLoopOutput is None:
+            return {
+                "prompt_ids": list(payload.prompt_ids), "response_ids": list(payload.response_ids),
+                "response_mask": list(payload.response_mask),
+                "response_logprobs": list(payload.response_logprobs),
+                "reward_score": payload.reward_score, "num_turns": payload.num_turns,
+                "extra_fields": payload.extra_fields,
+            }
+        return _VerlAgentLoopOutput(
+            prompt_ids=list(payload.prompt_ids), response_ids=list(payload.response_ids),
+            response_mask=list(payload.response_mask),
+            response_logprobs=list(payload.response_logprobs),
+            reward_score=payload.reward_score, num_turns=payload.num_turns,
+            metrics=_VerlAgentLoopMetrics(), extra_fields=payload.extra_fields,
+        )

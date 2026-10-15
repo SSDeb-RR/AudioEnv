@@ -105,8 +105,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   produce equivalent evidence.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
   alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
-  export. The pinned VeRL agent-loop API and reward-loading API have been
-  audited, but AudioEnv's model-driven loop has not yet run inside that worker.
+  export. `AudioEnvVerlAgentLoop` now subclasses and registers against the
+  pinned VeRL `AgentLoopBase` when loaded in the CUDA worker, converts an
+  append-only `TrajectoryV2` into VeRL's exact prompt/response/mask/log-prob
+  output, and masks caller/tool observation tokens to zero. It refuses an
+  implicit scripted fallback. The reviewed Qwen caller/tau2 runtime factory
+  that drives VeRL's live policy server is still not implemented, and this
+  loop has not run inside the GPU worker.
 - RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
   runtime/budget stops, reconnect, and SFTP command construction. Live API,
   SSH event streaming, and artifact collection are not verified.
@@ -134,7 +139,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-79 passed
+83 passed
 
 uv run audioenv validate
 389 passed, 0 failed

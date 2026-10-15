@@ -29,7 +29,7 @@ from audioenv.models.caller import ScriptedAudioCallerAdapter
 from audioenv.spec import SpeakAction, ToolCallAction
 from audioenv.training.audioenv_agent_loop import AudioEnvAgentLoop
 from audioenv.training.verl_omni import VerlOmniConfig, VerlOmniGRPOTrainer, VerlOmniGSPOTrainer
-from audioenv.training.verl_plugin import compute_audioenv_score
+from audioenv.training.verl_plugin import compute_audioenv_score, trajectory_to_verl_payload
 
 
 HEX = "a" * 64
@@ -205,6 +205,27 @@ def test_model_driven_caller_agent_loop_produces_terminal_v2_trace(tmp_path: Pat
     assert {item.producer for item in trace.audio_artifacts} == {"caller", "agent"}
     assert all(turn.response_mask == (1,) for turn in trace.turns)
 
+    # VeRL receives one append-only sequence: model tokens are trainable while
+    # caller/tool observation tokens inserted between turns are mask zero.
+    turns = list(trace.turns)
+    rebuilt = []
+    context = tuple(turns[0].input_ids)
+    for index, turn in enumerate(turns):
+        if index:
+            observation = (80 + index,)
+            context = context + tuple(turns[index - 1].generated_ids) + observation
+            turns[index] = turn.model_copy(update={
+                "input_ids": context,
+                "attention_mask": (1,) * (len(context) + len(turn.generated_ids)),
+                "position_ids": tuple(range(len(context) + len(turn.generated_ids))),
+            })
+        rebuilt.append(turns[index])
+    trace = trace.model_copy(update={"turns": tuple(rebuilt)})
+    payload = trajectory_to_verl_payload(trace)
+    assert payload.response_mask.count(1) == sum(len(turn.generated_ids) for turn in trace.turns)
+    assert payload.response_mask.count(0) == len(trace.turns) - 1
+    assert payload.extra_fields["audioenv_trusted_reward"]["verifier_hash"] == trace.verifier_hash
+
 
 def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch):
     checkout = tmp_path / "verl"; checkout.mkdir()
@@ -221,6 +242,7 @@ def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch
     assert not any(item.startswith("--config-") for item in gspo)
     assert "actor_rollout_ref.rollout.name=vllm_omni" in gspo
     assert "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe" in gspo
+    assert "actor_rollout_ref.rollout.agent.default_agent_loop=audioenv_agent" in gspo
     assert "reward.custom_reward_function.path=pkg://audioenv.training.verl_plugin" in gspo
 
 
@@ -236,6 +258,14 @@ def test_verl_reward_uses_only_hash_bound_protected_payload():
     bad = {**extra, "audioenv_verifier_hash": "different"}
     with pytest.raises(ValueError, match="verifier hash mismatch"):
         compute_audioenv_score("audioenv/tau2-retail", "", None, bad)
+
+
+def test_verl_native_runtime_refuses_implicit_scripted_fallback(monkeypatch):
+    from audioenv.training.verl_runtime import _runtime_factory
+
+    monkeypatch.delenv("AUDIOENV_NATIVE_RUNTIME_FACTORY", raising=False)
+    with pytest.raises(RuntimeError, match="reviewed Qwen caller/environment runtime"):
+        _runtime_factory()
 
 
 class _RunPodTransport:
