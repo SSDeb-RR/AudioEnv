@@ -67,6 +67,16 @@ def validate_package(package: EnvironmentPackage) -> ValidationReport:
         noop_failed = not bool(noop.trace.final_metrics.get("terminal_pass"))
         checks.append(CheckResult(f"{task.id}:noop_fail", noop_failed, "no-op rejected"))
 
+        isolated_a = AudioEnvironment(package)
+        isolated_b = AudioEnvironment(package)
+        isolated_a.reset(task.id, seed=41, model_id="isolation-a")
+        isolated_b.reset(task.id, seed=41, model_id="isolation-b")
+        pristine_b = isolated_b.state_snapshot
+        if task.oracle_actions:
+            isolated_a.step(task.oracle_actions[0])
+        isolated = isolated_b.state_snapshot == pristine_b and isolated_a.public_state is not isolated_b.public_state
+        checks.append(CheckResult(f"{task.id}:state_isolation", isolated, "episode mutations remain isolated"))
+
         replay = AudioEnvironment(package)
         replay.reset(task.id, seed=41, model_id="oracle")
         for action in task.oracle_actions:

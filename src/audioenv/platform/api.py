@@ -24,10 +24,11 @@ from .db import Database, InvalidTransition, PlatformRepository, serialize_exper
 from ..artifacts import LocalArtifactStore
 from ..authoring import CustomTaskInput, DeterministicEnvironmentAuthor
 from ..evaluation import package_hashes
-from ..contracts import GPUExecutionPlanV1, PromotionReportV1
+from ..contracts import GPUExecutionPlanV1, PromotionEvidenceV1
 from ..foundry import EnvironmentFoundry, ModelFoundry
 from ..harnesses import build_builtin_registry, resolve_compatibility
 from ..reference import build_reference_package, build_reference_split_manifest
+from ..promotion import PromotionEvidenceAuthority
 from ..training import TinyAudioPolicyTrainer, TinyTrainerConfig
 from ..validation import validate_package
 
@@ -93,8 +94,8 @@ class EnvironmentFoundryRequest(StrictRequest):
 
 
 class EnvironmentPromotionRequest(StrictRequest):
-    verifier_hash_after: str = Field(pattern=r"^[0-9a-f]{64}$")
-    checks: dict[str, bool]
+    evidence_artifact_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ModelFoundryRequest(StrictRequest):
@@ -128,6 +129,7 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
         artifact_root = Path(os.environ.get("AUDIOENV_ARTIFACT_ROOT", data_root / "artifacts")).resolve()
     app.state.data_root = data_root
     app.state.artifacts = LocalArtifactStore(artifact_root)
+    app.state.promotion_authority = PromotionEvidenceAuthority(data_root / "secrets" / "promotion-evidence.key")
     app.state.harness_registry = build_builtin_registry()
     app.state.environment_foundry = EnvironmentFoundry(data_root / "foundry" / "sources", app.state.artifacts)
     app.state.model_foundry = ModelFoundry(app.state.harness_registry, app.state.artifacts)
@@ -241,20 +243,58 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
         )
         return _harness_build(build)
 
-    @app.post("/api/environments/{environment_id}/promote")
-    def promote_environment(environment_id: str, request: EnvironmentPromotionRequest) -> dict[str, Any]:
+    @app.post("/api/environments/{environment_id:path}/promotion-evidence", status_code=201)
+    def create_promotion_evidence(environment_id: str) -> dict[str, Any]:
         row = repository.get_environment(environment_id)
         if row is None:
             raise HTTPException(404, "environment not found")
         package = json.loads(row.package_json)
-        verifier_before = str(package["protected_verifier"]["sha256"])
-        report = PromotionReportV1.evaluate(
-            environment_hash=row.content_hash, verifier_hash_before=verifier_before,
-            verifier_hash_after=request.verifier_hash_after, checks=request.checks,
+        verifier = package.get("protected_verifier")
+        if not isinstance(verifier, dict):
+            raise HTTPException(422, "environment has no protected verifier reference")
+        try:
+            verifier_payload = app.state.artifacts.get_bytes(str(verifier["artifact_id"]))
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(422, "protected verifier artifact is unavailable") from exc
+        actual_verifier_hash = sha256(verifier_payload).hexdigest()
+        if actual_verifier_hash != verifier.get("sha256"):
+            raise HTTPException(422, "protected verifier artifact hash mismatch")
+        validation = json.loads(row.validation_json) if row.validation_json else {}
+        evidence = app.state.promotion_authority.issue(
+            environment_hash=row.content_hash,
+            verifier_hash_before=actual_verifier_hash,
+            verifier_hash_after=actual_verifier_hash,
+            validation=validation,
         )
+        stored = app.state.artifacts.put_json(evidence.model_dump(mode="json"))
+        repository.add_artifact(
+            stored.id, experiment_id=None, project_id=row.project_id,
+            kind="promotion-evidence", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path),
+            metadata={"environment_id": row.id, "environment_hash": row.content_hash, "worker_id": evidence.worker_id},
+        )
+        report = app.state.promotion_authority.verify(evidence)
+        return {"artifact_id": stored.id, "evidence": evidence.model_dump(mode="json"), "report": report.model_dump(mode="json")}
+
+    @app.post("/api/environments/{environment_id:path}/promote")
+    def promote_environment(environment_id: str, request: EnvironmentPromotionRequest) -> dict[str, Any]:
+        row = repository.get_environment(environment_id)
+        if row is None:
+            raise HTTPException(404, "environment not found")
+        if request.confirmation_hash != row.content_hash:
+            raise HTTPException(409, "confirmation hash does not match the current environment")
+        try:
+            payload = json.loads(app.state.artifacts.get_bytes(request.evidence_artifact_id))
+            evidence = PromotionEvidenceV1.model_validate(payload)
+            report = app.state.promotion_authority.verify(evidence)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(422, f"invalid promotion evidence: {exc}") from exc
+        if evidence.environment_hash != row.content_hash:
+            raise HTTPException(409, "promotion evidence belongs to a different environment version")
         if not report.promoted:
             raise HTTPException(422, {"message": "promotion gates failed", "report": report.model_dump(mode="json")})
-        promoted = repository.promote_environment(environment_id, report.model_dump(mode="json"))
+        final_report = report.model_copy(update={"evidence_artifact_id": request.evidence_artifact_id})
+        promoted = repository.promote_environment(environment_id, final_report.model_dump(mode="json"))
         return _environment(promoted, details=True)
 
     @app.post("/api/foundry/models", status_code=201)

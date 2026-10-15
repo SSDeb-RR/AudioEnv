@@ -56,9 +56,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   Docker-dependent pipelines are rejected rather than mounting the host socket.
   Harbor instructions remain public
   while verifier paths and hashes are stored in a protected artifact.
-- Generated environments use an explicit promotion report. Sandbox build,
-  oracle, no-op, adversarial, determinism, state-isolation, leakage,
-  reward-integrity, and verifier-immutability gates must all pass.
+- Environment promotion no longer accepts caller-supplied gate booleans. The
+  backend aggregates persisted validator checks, hashes the protected verifier
+  artifact, issues content-addressed HMAC-signed evidence with a locally held
+  `0600` key, and revalidates its signature and environment hash immediately
+  before registry promotion. Sandbox/build, oracle, no-op, adversarial,
+  determinism, state-isolation, leakage, reward-integrity, and
+  verifier-immutability gates must all pass.
 - `TrajectoryV2` validates multimodal feature references, prompt/response
   positions, response-only masks, rollout log-probabilities, policy version,
   audio lineage, episode termination, and reward provenance.
@@ -78,6 +82,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   environment reward. Official train/test membership is preserved instead of
   being overwritten by the aggregate `base` list. Full upstream
   communication-reward parity is not yet claimed.
+- Declarative in-process environments now receive backend-issued promotion
+  evidence. Harbor/repository candidates still require an isolated OCI
+  validation worker before they can produce equivalent evidence.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
   alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
   export. The pinned VeRL agent-loop API and reward-loading API have been
@@ -106,10 +113,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-69 passed
+72 passed
 
 uv run audioenv validate
-341 passed, 0 failed
+389 passed, 0 failed
 
 cd web && npm run build && npm run test:e2e
 Vite production build passed

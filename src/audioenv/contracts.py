@@ -397,6 +397,8 @@ class PromotionReportV1(FrozenModel):
     checks: dict[str, bool]
     promoted: bool
     missing_or_failed: tuple[str, ...] = ()
+    evidence_artifact_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    worker_id: str | None = None
 
     @model_validator(mode="after")
     def enforce_hard_gates(self) -> "PromotionReportV1":
@@ -419,6 +421,7 @@ class PromotionReportV1(FrozenModel):
     def evaluate(
         cls, *, environment_hash: str, verifier_hash_before: str,
         verifier_hash_after: str, checks: dict[str, bool],
+        evidence_artifact_id: str | None = None, worker_id: str | None = None,
     ) -> "PromotionReportV1":
         required = {
             "sandbox_build", "oracle_pass", "noop_fail", "adversarial_fail",
@@ -432,7 +435,21 @@ class PromotionReportV1(FrozenModel):
             verifier_hash_before=verifier_hash_before,
             verifier_hash_after=verifier_hash_after,
             checks=checks, promoted=not failed, missing_or_failed=tuple(failed),
+            evidence_artifact_id=evidence_artifact_id, worker_id=worker_id,
         )
+
+
+class PromotionEvidenceV1(FrozenModel):
+    schema_version: Literal["audioenv.promotion-evidence/v1"] = "audioenv.promotion-evidence/v1"
+    environment_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash_before: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash_after: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checks: dict[str, bool]
+    worker_id: str
+    issued_at: str
+    nonce: str
+    key_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ConformanceCheckV1(FrozenModel):
