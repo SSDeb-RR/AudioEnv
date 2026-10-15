@@ -27,6 +27,7 @@ from ..evaluation import package_hashes
 from ..contracts import GPUExecutionPlanV1, PromotionEvidenceV1
 from ..foundry import EnvironmentFoundry, ModelFoundry
 from ..harnesses import build_builtin_registry, resolve_compatibility
+from ..isolated_validation import IsolatedValidationError, IsolatedValidationRunner
 from ..reference import build_reference_package, build_reference_split_manifest
 from ..promotion import PromotionEvidenceAuthority
 from ..training import TinyAudioPolicyTrainer, TinyTrainerConfig
@@ -133,6 +134,7 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
     app.state.harness_registry = build_builtin_registry()
     app.state.environment_foundry = EnvironmentFoundry(data_root / "foundry" / "sources", app.state.artifacts)
     app.state.model_foundry = ModelFoundry(app.state.harness_registry, app.state.artifacts)
+    app.state.validation_runner = IsolatedValidationRunner()
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -455,10 +457,14 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
     @app.post("/api/environments/custom", status_code=201)
     def create_custom_environment(request: CustomTaskInput) -> dict[str, Any]:
         authored = DeterministicEnvironmentAuthor(app.state.artifacts).author(request)
-        report = {
-            "passed": authored.validation.passed,
-            "checks": [asdict(check) for check in authored.validation.checks],
-        }
+        try:
+            report = app.state.validation_runner.validate_custom(request)
+        except IsolatedValidationError as exc:
+            raise HTTPException(422, f"isolated environment validation failed: {exc}") from exc
+        if report.get("environment_hash") != authored.boundary.content_hash:
+            raise HTTPException(409, "isolated validator environment hash mismatch")
+        if report.get("verifier_hash") != authored.boundary.protected_verifier.sha256:
+            raise HTTPException(409, "isolated validator verifier hash mismatch")
         boundary = authored.boundary.model_dump(mode="json")
         row = repository.register_environment(
             record_id=f"{authored.boundary.id}@{authored.boundary.version}",

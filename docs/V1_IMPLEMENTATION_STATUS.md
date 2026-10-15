@@ -83,8 +83,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   being overwritten by the aggregate `base` list. Full upstream
   communication-reward parity is not yet claimed.
 - Declarative in-process environments now receive backend-issued promotion
-  evidence. Harbor/repository candidates still require an isolated OCI
-  validation worker before they can produce equivalent evidence.
+  evidence only after a constrained subprocess independently reconstructs the
+  environment and reproduces both its environment and verifier hashes. The
+  worker uses a sanitized environment, bounded input and deadline, closed
+  descriptors, and host-supported POSIX resource limits. Harbor/repository
+  candidates still require an isolated OCI validation worker before they can
+  produce equivalent evidence.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
   alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
   export. The pinned VeRL agent-loop API and reward-loading API have been
@@ -113,7 +117,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-72 passed
+75 passed
 
 uv run audioenv validate
 389 passed, 0 failed

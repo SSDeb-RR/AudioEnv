@@ -46,7 +46,7 @@ reported as a preview, not AudioEnv V1 complete.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 72 tests passed, including signed backend promotion evidence, harness foundry, API-to-worker product acceptance flows, pinned VeRL launch/reward contracts, and the isolated tau2 controller |
+| V0 and V1 Python suite | PASS | 75 tests passed, including isolated declarative validation, signed backend promotion evidence, API-to-worker product acceptance flows, pinned VeRL launch/reward contracts, and the isolated tau2 controller |
 | Built-in environment validation | PASS | 389 checks passed across all 48 tasks; 0 failed, including per-episode state isolation |
 | Python package build | PASS | `audioenv_foundry-0.5.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
 | Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
@@ -63,6 +63,7 @@ reported as a preview, not AudioEnv V1 complete.
 | Official EnvHarness type integration | PASS | Exact bridge test passed against pinned upstream commit |
 | Pinned tau2 retail worker | PASS, LIMITED | Live Python 3.12 worker reported 114 tasks, reset a real task, exposed 16 tools, and rejected a no-op with reward 0.0; communication reward parity remains pending |
 | Backend promotion evidence | PASS, LIMITED | API rejects client gate booleans, verifies protected artifact hashes, signs evidence, detects tampering, and binds promotion to the current environment hash; OCI repository validation remains pending |
+| Isolated declarative validator | PASS | Subprocess reconstructs the custom environment under bounded input/time/resources and registration requires exact environment/verifier hash parity |
 | Qwen3-Omni dependency probe | PASS | Dependencies import; probe correctly blocks on missing CUDA and local checkpoint without downloading |
 | Real Qwen native-audio episode | BLOCKED | No CUDA device or checkpoint on the audit host |
 | VeRL-Omni launch and reward contract | PASS, LIMITED | Launcher matches pinned V1 `main_omni` recipe and the hash-bound reward function is unit-tested; no CUDA execution yet |
