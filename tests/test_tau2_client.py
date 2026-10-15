@@ -68,3 +68,13 @@ def test_tau2_discovery_does_not_replace_official_splits_with_base():
     }
     discovered = worker.handle({"operation": "discover"})
     assert discovered == {"tasks": [{"id": "1", "split": "train"}, {"id": "2", "split": "test"}]}
+
+
+def test_tau2_private_caller_context_is_separate_from_public_reset():
+    worker = object.__new__(RetailWorker)
+    scenario = type("Scenario", (), {"model_dump": lambda self, mode=None: {"instructions": {"reason_for_call": "refund"}}})()
+    task = type("Task", (), {"id": "1", "user_scenario": scenario})()
+    worker.sessions = {"session": {"task": task}}
+    assert worker.handle({"operation": "caller_context", "session_id": "session"}) == {
+        "user_scenario": {"instructions": {"reason_for_call": "refund"}},
+    }

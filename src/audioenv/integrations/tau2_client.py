@@ -130,6 +130,20 @@ class Tau2WorkerClient:
     def reset(self, task_id: str) -> dict[str, Any]:
         return self.request("reset", task_id=task_id)
 
+    def caller_context(self, session_id: str) -> dict[str, Any]:
+        """Return private user instructions for the frozen caller only."""
+        return self.request("caller_context", session_id=session_id)
+
+    def speak(
+        self, session_id: str, role: str, semantic_text: str, *, end_episode: bool = False,
+    ) -> dict[str, Any]:
+        if role not in {"assistant", "user"}:
+            raise ValueError("tau2 speech role must be assistant or user")
+        return self.request(
+            "speak", session_id=session_id, role=role,
+            semantic_text=semantic_text, end_episode=end_episode,
+        )
+
     def tool(self, session_id: str, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("tool", session_id=session_id, name=name, arguments=dict(arguments))
 

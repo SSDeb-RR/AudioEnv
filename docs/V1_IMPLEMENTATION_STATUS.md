@@ -93,9 +93,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   `uv`, correlates requests, enforces deadlines, captures bounded diagnostics,
   and terminates the process group safely. A live pinned run discovered 114
   retail tasks, reset task `0`, exposed 16 tools, and produced a `0.0` no-op
-  environment reward. Official train/test membership is preserved instead of
-  being overwritten by the aggregate `base` list. Full upstream
-  communication-reward parity is not yet claimed.
+  environment reward. The worker now keeps the private user scenario behind a
+  separate caller-only operation, records agent/user semantic turns and tool
+  results, and invokes τ²'s official `EvaluationType.ALL` evaluator after an
+  explicit terminal action. A live no-op episode returned the complete
+  upstream reward breakdown at `0.0`. Official train/test membership is
+  preserved instead of being overwritten by the aggregate `base` list. Gold
+  trajectory parity across every reward basis is not yet claimed.
 - Declarative in-process environments now receive backend-issued promotion
   evidence only after a constrained subprocess independently reconstructs the
   environment and reproduces both its environment and verifier hashes. The
@@ -139,7 +143,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-83 passed
+84 passed
 
 uv run audioenv validate
 389 passed, 0 failed

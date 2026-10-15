@@ -46,7 +46,7 @@ reported as a preview, not AudioEnv V1 complete.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 83 tests passed, including executable Omni conformance, isolated declarative validation, signed promotion evidence, pinned VeRL launch/reward/agent-loop contracts, the isolated tau2 controller, and the guarded Modal provider contract |
+| V0 and V1 Python suite | PASS | 84 tests passed, including executable Omni conformance, isolated declarative validation, signed promotion evidence, pinned VeRL launch/reward/agent-loop contracts, caller-private tau2 evaluation, and the guarded Modal provider contract |
 | Built-in environment validation | PASS | 389 checks passed across all 48 tasks; 0 failed, including per-episode state isolation |
 | Python package build | PASS | `audioenv_foundry-0.5.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
 | Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
@@ -61,7 +61,7 @@ reported as a preview, not AudioEnv V1 complete.
 | CPU parameter update | PASS | Initial and final parameter hashes differ; checkpoint reload reproduces the trained result |
 | Local held-out comparison | PASS, LIMITED | Baseline `0.0`, trained `1.0` over 24 samples from the immutable test split; audio-conditioned platform proof, not a Qwen result |
 | Official EnvHarness type integration | PASS | Exact bridge test passed against pinned upstream commit |
-| Pinned tau2 retail worker | PASS, LIMITED | Live Python 3.12 worker reported 114 tasks, reset a real task, exposed 16 tools, and rejected a no-op with reward 0.0; communication reward parity remains pending |
+| Pinned tau2 retail worker | PASS, LIMITED | Live Python 3.12 worker reported 114 tasks, reset a real task, exposed 16 tools, isolated caller-private instructions from public reset, and ran the official full evaluator for a terminal no-op with reward 0.0; gold parity across all reward bases remains pending |
 | Backend promotion evidence | PASS, LIMITED | API rejects client gate booleans, verifies protected artifact hashes, signs evidence, detects tampering, and binds promotion to the current environment hash; OCI repository validation remains pending |
 | Isolated declarative validator | PASS | Subprocess reconstructs the custom environment under bounded input/time/resources and registration requires exact environment/verifier hash parity |
 | Qwen3-Omni dependency probe | PASS | Dependencies import; probe correctly blocks on missing CUDA and local checkpoint without downloading |
