@@ -40,6 +40,16 @@ closed-model RL.
 - FastAPI service and React/TypeScript dashboard driven by persisted records.
 - A genuine audio-conditioned Torch REINFORCE workflow with no oracle replay,
   train-only optimization, checkpoint reload, and 24-sample held-out comparison.
+- A dynamic harness registry for environments, model families, callers,
+  trainers, and execution providers, including Python entry-point discovery.
+- A repository/benchmark Foundry that safely inventories source without
+  importing it, compiles recognized declarative tasks, and emits reviewable
+  OCI coding-environment scaffolds when repository tests are detected.
+- Optional Codex-assisted environment authoring from a bounded, redacted
+  source digest. Its schema-constrained output remains untrusted, validated,
+  and human-review-required; Codex is never invoked during startup or tests.
+- Omni model onboarding that selects an architecture-family driver or emits a
+  conformance scaffold, plus capability-derived caller and trainer choices.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
 
@@ -65,6 +75,11 @@ uv run audioenv app --data-dir .audioenv
 
 # Open http://127.0.0.1:8000. The wheel includes the compiled SPA; Node is
 # needed only to rebuild it. `audioenv dev` remains the hot-reload command.
+
+# In the dashboard, open Foundry and submit a local path or an HTTPS GitHub
+# repository. Repository code is inspected but never imported or executed.
+# Choose Codex authoring explicitly only when an authenticated Codex CLI is
+# available; deterministic inspection is the credential-free default.
 
 # This does not download weights; it reports why Qwen is or is not available.
 uv run --extra qwen audioenv qwen-probe

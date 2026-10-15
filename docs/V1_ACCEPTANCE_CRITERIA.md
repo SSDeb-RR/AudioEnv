@@ -46,13 +46,17 @@ reported as a preview, not AudioEnv V1 complete.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 46 tests passed, including the API-to-worker product acceptance flow |
+| V0 and V1 Python suite | PASS | 53 tests passed, including harness foundry, Codex authoring-boundary, and API-to-worker product acceptance flows |
 | Built-in environment validation | PASS | 341 checks passed across all 48 tasks; 0 failed |
-| Python package build | PASS | `audioenv_foundry-0.3.0` wheel and sdist built; wheel inventory includes SPA, migrations, and model adapters |
+| Python package build | PASS | `audioenv_foundry-0.4.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
+| Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
+| Dynamic model harness | PASS, LIMITED | Qwen3-Omni family detection and unknown-driver scaffold generation pass; real model conformance remains GPU-gated |
+| Dynamic trainer/caller selection | PASS | API and dashboard options are capability-resolved; blocked backends remain visible with reasons |
 | Dashboard dependency audit | PASS | `npm audit` reported zero vulnerabilities |
 | Dashboard production build | PASS | TypeScript and Vite build completed |
 | One-command local startup | PASS | `audioenv app --data-dir ...` applied migrations and served bundled SPA plus API from an isolated wheel install without Node |
-| Dashboard product flow | PASS | Playwright created a project, selected resources, preflighted, launched, waited for completion, reloaded the checkpoint, viewed the comparison, and exposed export downloads |
+| Dashboard product flow | PASS | Playwright covers project-to-comparison execution plus repository analysis and Omni model harness onboarding |
+| Codex authoring boundary | PASS | Fake-runner test proves read-only/schema-constrained invocation, secret redaction, deterministic validation, and review-gated output without making a paid call |
 | Persisted local workflow | PASS | 30-step subprocess run completed with 92 persisted metrics, checkpoint/manifest artifacts, two evaluations, and one paired comparison |
 | CPU parameter update | PASS | Initial and final parameter hashes differ; checkpoint reload reproduces the trained result |
 | Local held-out comparison | PASS, LIMITED | Baseline `0.0`, trained `1.0` over 24 samples from the immutable test split; audio-conditioned platform proof, not a Qwen result |

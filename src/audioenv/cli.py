@@ -79,6 +79,18 @@ def main(argv: list[str] | None = None) -> int:
     export_run.add_argument("experiment_id")
     export_run.add_argument("--database", type=Path, default=Path(".audioenv/audioenv.db"))
     export_run.add_argument("--output", type=Path, required=True)
+    harnesses = subparsers.add_parser("harnesses", help="List discovered harness plugins")
+    harnesses.add_argument("--kind", choices=("environment", "model", "caller", "trainer", "provider"))
+    foundry_environment = subparsers.add_parser("foundry-environment", help="Analyze a benchmark or repository")
+    foundry_environment.add_argument("source_uri")
+    foundry_environment.add_argument("--data-dir", type=Path, default=Path(".audioenv"))
+    foundry_environment.add_argument(
+        "--authoring-provider", choices=("deterministic", "codex"), default="deterministic"
+    )
+    foundry_model = subparsers.add_parser("foundry-model", help="Inspect an Omni model and select a family driver")
+    foundry_model.add_argument("model_id")
+    foundry_model.add_argument("--source")
+    foundry_model.add_argument("--data-dir", type=Path, default=Path(".audioenv"))
     args = parser.parse_args(argv)
 
     package = build_reference_package()
@@ -187,6 +199,38 @@ def main(argv: list[str] | None = None) -> int:
         probe = Qwen3OmniAgentAdapter(args.checkpoint).probe()
         print(json.dumps(probe.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0 if probe.available else 1
+    if args.command == "harnesses":
+        from .harnesses import build_builtin_registry
+
+        registry = build_builtin_registry()
+        registry.discover_entry_points()
+        print(json.dumps(
+            [item.model_dump(mode="json") for item in registry.list(args.kind)],
+            indent=2,
+            sort_keys=True,
+        ))
+        return 0
+    if args.command == "foundry-environment":
+        from .artifacts import LocalArtifactStore
+        from .foundry import EnvironmentFoundry
+
+        data_dir = args.data_dir.resolve()
+        result = EnvironmentFoundry(
+            data_dir / "foundry" / "sources", LocalArtifactStore(data_dir / "artifacts")
+        ).build(args.source_uri, authoring_provider=args.authoring_provider)
+        print(json.dumps(result.report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0 if result.report.status == "available" else 2
+    if args.command == "foundry-model":
+        from .artifacts import LocalArtifactStore
+        from .foundry import ModelFoundry
+        from .harnesses import build_builtin_registry
+
+        data_dir = args.data_dir.resolve()
+        report = ModelFoundry(
+            build_builtin_registry(), LocalArtifactStore(data_dir / "artifacts")
+        ).inspect(args.model_id, args.source or args.model_id)
+        print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0 if report.status == "available" else 2
     if args.command == "platform-demo":
         from .platform.db import Database, PlatformRepository, serialize_experiment
         from .platform.execution import LocalExecutionProvider

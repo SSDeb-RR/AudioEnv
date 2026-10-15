@@ -8,7 +8,8 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
-from typing import Any
+import subprocess
+from typing import Any, Literal
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -23,6 +24,8 @@ from .db import Database, InvalidTransition, PlatformRepository, serialize_exper
 from ..artifacts import LocalArtifactStore
 from ..authoring import CustomTaskInput, DeterministicEnvironmentAuthor
 from ..evaluation import package_hashes
+from ..foundry import EnvironmentFoundry, ModelFoundry
+from ..harnesses import build_builtin_registry, resolve_compatibility
 from ..reference import build_reference_package, build_reference_split_manifest
 from ..training import TinyAudioPolicyTrainer, TinyTrainerConfig
 from ..validation import validate_package
@@ -74,13 +77,32 @@ class ModelProbeRequest(StrictRequest):
     model_id: str
 
 
+class EnvironmentFoundryRequest(StrictRequest):
+    project_id: str | None = None
+    source_uri: str = Field(min_length=1, max_length=4_096)
+    authoring_provider: Literal["deterministic", "codex"] = "deterministic"
+
+
+class ModelFoundryRequest(StrictRequest):
+    project_id: str | None = None
+    model_id: str = Field(min_length=1, max_length=500)
+    source: str = Field(min_length=1, max_length=4_096)
+    role: str = Field(default="agent", pattern="^(agent|caller|both)$")
+
+
+class CompatibilityRequest(StrictRequest):
+    environment_id: str
+    model_id: str
+    caller_id: str | None = None
+
+
 def create_app(database_url: str | None = None, *, static_dir: Path | None = None) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
     database.create_schema()
     repository = PlatformRepository(database)
     repository.ensure_default_project()
-    app = FastAPI(title="AudioEnv", version="0.3.0")
+    app = FastAPI(title="AudioEnv", version="0.4.0")
     app.state.database = database
     app.state.repository = repository
     app.state.processes = {}
@@ -92,6 +114,9 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
         artifact_root = Path(os.environ.get("AUDIOENV_ARTIFACT_ROOT", data_root / "artifacts")).resolve()
     app.state.data_root = data_root
     app.state.artifacts = LocalArtifactStore(artifact_root)
+    app.state.harness_registry = build_builtin_registry()
+    app.state.environment_foundry = EnvironmentFoundry(data_root / "foundry" / "sources", app.state.artifacts)
+    app.state.model_foundry = ModelFoundry(app.state.harness_registry, app.state.artifacts)
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -102,7 +127,7 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.3.0"}
+        return {"status": "ok", "version": "0.4.0"}
 
     @app.get("/api/overview")
     def overview() -> dict[str, Any]:
@@ -129,45 +154,119 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
 
     @app.get("/api/trainers")
     def trainers() -> list[dict[str, Any]]:
-        local = TinyAudioPolicyTrainer(build_reference_package())
-        return [
-            {
-                "id": local.trainer_id,
-                "display_name": "Small Audio Tool Policy · REINFORCE",
-                "status": "available",
-                "status_reason": "Credential-free CPU platform proof",
-                "capabilities": local.capabilities.model_dump(mode="json"),
-                "configuration_schema": {
-                    "steps": {"type": "integer", "minimum": 1, "default": 40},
-                    "learning_rate": {"type": "number", "exclusiveMinimum": 0, "default": 0.08},
-                    "seed": {"type": "integer", "default": 7},
-                    "checkpoint_interval": {"type": "integer", "minimum": 1, "default": 10},
-                },
-            },
-            {
-                "id": "audioenv/verl-omni-gspo",
-                "display_name": "VeRL-Omni Qwen3-Omni Thinker GSPO",
-                "status": "blocked",
-                "status_reason": "Integration ready; GPU acceptance not run",
-                "capabilities": {"algorithms": ["gspo"], "model_families": ["qwen3-omni"]},
-                "configuration_schema": {},
-            },
-        ]
+        return [item.model_dump(mode="json") for item in app.state.harness_registry.list("trainer")]
 
     @app.get("/api/providers")
     def providers() -> list[dict[str, Any]]:
-        return [
-            {
-                "id": "local-subprocess", "display_name": "Local CPU", "status": "available",
-                "supports_quote": True, "estimated_cost_usd": 0.0,
+        rows = []
+        for item in app.state.harness_registry.list("provider"):
+            row = item.model_dump(mode="json")
+            row.update({
+                "supports_quote": True,
+                "estimated_cost_usd": 0.0 if item.id == "local-subprocess" else None,
+            })
+            rows.append(row)
+        return rows
+
+    @app.get("/api/harnesses")
+    def harnesses(kind: str | None = None) -> list[dict[str, Any]]:
+        valid = {"environment", "model", "caller", "trainer", "provider"}
+        if kind is not None and kind not in valid:
+            raise HTTPException(422, f"kind must be one of {sorted(valid)}")
+        return [item.model_dump(mode="json") for item in app.state.harness_registry.list(kind)]
+
+    @app.get("/api/foundry/builds")
+    def foundry_builds(kind: str | None = None) -> list[dict[str, Any]]:
+        return [_harness_build(row) for row in repository.list_harness_builds(kind)]
+
+    @app.get("/api/foundry/builds/{build_id}")
+    def foundry_build(build_id: str) -> dict[str, Any]:
+        row = repository.get_harness_build(build_id)
+        if row is None:
+            raise HTTPException(404, "harness build not found")
+        return _harness_build(row)
+
+    @app.post("/api/foundry/environments", status_code=201)
+    def build_environment(request: EnvironmentFoundryRequest) -> dict[str, Any]:
+        if request.project_id and repository.get_project(request.project_id) is None:
+            raise HTTPException(422, "project not found")
+        try:
+            result = app.state.environment_foundry.build(
+                request.source_uri, authoring_provider=request.authoring_provider,
+            )
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        environment_id = None
+        if result.authored is not None:
+            boundary = result.authored.boundary
+            validation = {
+                "passed": result.authored.validation.passed,
+                "checks": [asdict(item) for item in result.authored.validation.checks],
+            }
+            row = repository.register_environment(
+                record_id=f"{boundary.id}@{boundary.version}", version=boundary.version,
+                content_hash=boundary.content_hash, source_kind=boundary.source.kind,
+                authoring_status=boundary.authoring_status, package=boundary.model_dump(mode="json"),
+                validation=validation, project_id=request.project_id,
+            )
+            environment_id = row.id
+        report = result.report.model_dump(mode="json")
+        _register_foundry_artifacts(
+            repository, app.state.artifacts, result.report.generated_files,
+            project_id=request.project_id, metadata={
+                "kind": "environment", "source_uri": request.source_uri,
+                "authoring_provider": request.authoring_provider,
             },
-            {
-                "id": "runpod-secure-cloud", "display_name": "RunPod Secure Cloud Pod",
-                "status": "blocked", "supports_quote": True,
-                "status_reason": "RUNPOD_API_KEY, live quote, typed confirmation, and paid-run approval required",
-                "estimated_cost_usd": None,
-            },
-        ]
+        )
+        build = repository.add_harness_build(
+            project_id=request.project_id, kind="environment", source_uri=request.source_uri,
+            status=result.report.status, report=report,
+            generated_artifact_ids=result.report.generated_files, environment_id=environment_id,
+        )
+        return _harness_build(build)
+
+    @app.post("/api/foundry/models", status_code=201)
+    def build_model_harness(request: ModelFoundryRequest) -> dict[str, Any]:
+        if request.project_id and repository.get_project(request.project_id) is None:
+            raise HTTPException(422, "project not found")
+        report = app.state.model_foundry.inspect(request.model_id, request.source)
+        adapter_type = report.selected_driver.removeprefix("audioenv/") if report.selected_driver else "generated-needs-review"
+        repository.register_model(
+            request.model_id, request.model_id.rsplit("/", 1)[-1], adapter_type, request.role,
+            {"checkpoint": request.source, "onboarding": report.model_dump(mode="json")}, request.project_id,
+        )
+        _register_foundry_artifacts(
+            repository, app.state.artifacts, report.generated_files,
+            project_id=request.project_id, metadata={"kind": "model", "model_id": request.model_id},
+        )
+        build = repository.add_harness_build(
+            project_id=request.project_id, kind="model", source_uri=request.source,
+            status=report.status, report=report.model_dump(mode="json"),
+            generated_artifact_ids=report.generated_files, model_id=request.model_id,
+        )
+        return _harness_build(build)
+
+    @app.post("/api/compatibility")
+    def compatibility(request: CompatibilityRequest) -> dict[str, Any]:
+        environment = repository.get_environment(request.environment_id)
+        model = repository.get_model(request.model_id)
+        if environment is None:
+            raise HTTPException(404, "environment not found")
+        if model is None:
+            raise HTTPException(404, "model not found")
+        package = json.loads(environment.package_json)
+        requirements = tuple(package.get("required_capabilities", ("audio-input",)))
+        probe = json.loads(model.probe_json) if model.probe_json else {}
+        capability_map = probe.get("capabilities") or json.loads(model.config_json).get("onboarding", {}).get("capabilities", [])
+        if isinstance(capability_map, dict):
+            capabilities = tuple(_capability_names(capability_map))
+        else:
+            capabilities = tuple(capability_map)
+        return resolve_compatibility(
+            app.state.harness_registry, environment_id=environment.id,
+            environment_requirements=requirements, model_id=model.id,
+            model_capabilities=capabilities, caller_id=request.caller_id,
+        ).model_dump(mode="json")
 
     @app.post("/api/models", status_code=201)
     def register_model(request: ModelCreate) -> dict[str, Any]:
@@ -494,6 +593,12 @@ def _seed_builtin_records(repository: PlatformRepository) -> None:
         )
         repository.save_split_manifest(manifest.content_hash, env_id, manifest.model_dump(mode="json"))
     model_id = "audioenv/small-audio-tool-policy"
+    builtin_capabilities = {
+        "audio_input": True, "audio_output": False, "structured_tools": True,
+        "token_logprobs": True, "trainable": True, "batching": False,
+        "distributed": False, "trainable_modules": ["audio_candidate_scorer"],
+        "checkpoint_format": "pytorch-state-dict",
+    }
     if repository.get_model(model_id) is None:
         repository.register_model(
             model_id, "Small Audio Tool Policy", "small-audio-tool-policy", "agent",
@@ -502,8 +607,14 @@ def _seed_builtin_records(repository: PlatformRepository) -> None:
         estimate = TinyAudioPolicyTrainer(package).preflight(TinyTrainerConfig(steps=1))
         repository.set_model_probe(model_id, {
             "available": estimate.available, "device": "cpu", "revision": "builtin-v2",
-            "reasons": list(estimate.reasons),
+            "reasons": list(estimate.reasons), "capabilities": builtin_capabilities,
         })
+    else:
+        existing = repository.get_model(model_id)
+        probe = json.loads(existing.probe_json) if existing and existing.probe_json else {}
+        if "capabilities" not in probe:
+            probe["capabilities"] = builtin_capabilities
+            repository.set_model_probe(model_id, probe)
 
 
 def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[str, Any]:
@@ -575,6 +686,48 @@ def _artifact(row) -> dict[str, Any]:
         "kind": row.kind, "media_type": row.media_type, "size_bytes": row.size_bytes,
         "metadata": json.loads(row.metadata_json), "download_url": f"/api/artifacts/{row.id}/download",
     }
+
+
+def _harness_build(row) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "project_id": row.project_id,
+        "kind": row.kind,
+        "source_uri": row.source_uri,
+        "status": row.status,
+        "report": json.loads(row.report_json),
+        "generated_artifact_ids": json.loads(row.generated_artifact_ids_json),
+        "environment_id": row.environment_id,
+        "model_id": row.model_id,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def _capability_names(capabilities: dict[str, Any]) -> list[str]:
+    names = [key.replace("_", "-") for key, enabled in capabilities.items() if enabled is True]
+    checkpoint = capabilities.get("checkpoint_format")
+    if checkpoint:
+        names.append(str(checkpoint))
+    if capabilities.get("distributed"):
+        names.append("distributed")
+    return sorted(set(names))
+
+
+def _register_foundry_artifacts(
+    repository: PlatformRepository,
+    store: LocalArtifactStore,
+    artifact_ids: tuple[str, ...],
+    *,
+    project_id: str | None,
+    metadata: dict[str, Any],
+) -> None:
+    for artifact_id in artifact_ids:
+        stored = store.describe(artifact_id, media_type="application/json")
+        repository.add_artifact(
+            stored.id, experiment_id=None, project_id=project_id,
+            kind="harness-scaffold", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path), metadata=metadata,
+        )
 
 
 def _evaluation(repository: PlatformRepository, row, *, samples: bool = False) -> dict[str, Any]:

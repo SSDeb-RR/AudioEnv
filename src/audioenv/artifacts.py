@@ -44,3 +44,8 @@ class LocalArtifactStore:
             raise ValueError("artifact path escapes the artifact root")
         return resolved.read_bytes()
 
+    def describe(self, artifact_id: str, *, media_type: str = "application/octet-stream") -> StoredArtifact:
+        payload = self.get_bytes(artifact_id)
+        path = (self.root / artifact_id[:2] / artifact_id[2:]).resolve()
+        return StoredArtifact(artifact_id, artifact_id, len(payload), media_type, path)
+

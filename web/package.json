@@ -1,12 +1,12 @@
 {
   "name": "audioenv-dashboard",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests --exclude 'tests/**'",
     "test:e2e": "playwright test"
   },
   "dependencies": {

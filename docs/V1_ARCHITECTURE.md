@@ -19,6 +19,36 @@ React dashboard ──HTTP/SSE── FastAPI service ──SQLAlchemy── SQLi
 The SDK stays usable without the platform server. Platform, training, and Qwen
 dependencies are optional extras and are imported lazily.
 
+## Harness Foundry
+
+`HarnessRegistry` is the common discovery surface for environment, model,
+caller, trainer, and execution-provider plugins. Built-ins and Python entry
+points publish the same capability descriptors. The compatibility resolver
+intersects environment requirements, model capabilities, caller requirements,
+trainer requirements, and runtime availability before the UI offers a choice.
+
+`EnvironmentFoundry` accepts a local source or HTTPS GitHub repository. It
+performs bounded, non-executing inventory. A declarative `audioenv-task.json`
+is compiled through the deterministic author and fully validated. An
+`audioenv/v1` benchmark is inspected and can execute only when its tool
+handlers are independently audited. A repository with tests generates a
+protected coding-environment and OCI-sandbox scaffold, but no repository code
+is run on the host.
+
+The optional `CodexEnvironmentAuthor` receives only a 64 KB allowlisted,
+secret-redacted text digest rather than source filesystem access. It runs only
+after an explicit request, in an ephemeral read-only Codex session with a
+`CustomTaskInput` output schema. The candidate is compiled by the constrained
+deterministic author, independently validated, and stored as
+`generated_needs_review`; it cannot redefine a validated verifier or become a
+selectable training environment without review.
+
+`ModelFoundry` reads a local model configuration when present, selects a
+reusable architecture-family driver, and records conformance gates. Unknown
+families receive a content-addressed driver scaffold and remain
+`needs_review`. Model identifiers never imply that weights were downloaded or
+loaded.
+
 ## Trust boundaries
 
 - Model workers receive public task material, native caller audio, permitted

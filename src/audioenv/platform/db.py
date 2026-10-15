@@ -191,6 +191,20 @@ class ExternalComputeResourceRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class HarnessBuildRecord(Base):
+    __tablename__ = "harness_builds"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String, index=True)
+    source_uri: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String, index=True)
+    report_json: Mapped[str] = mapped_column(Text)
+    generated_artifact_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    environment_id: Mapped[str | None] = mapped_column(ForeignKey("environments.id"), nullable=True)
+    model_id: Mapped[str | None] = mapped_column(ForeignKey("models.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Database:
     def __init__(self, url: str = "sqlite:///./.audioenv/audioenv.db"):
         if url.startswith("sqlite:///"):
@@ -331,6 +345,45 @@ class PlatformRepository:
     def get_environment(self, environment_id: str) -> EnvironmentRecord | None:
         with self.database.session() as session:
             return session.get(EnvironmentRecord, environment_id)
+
+    def add_harness_build(
+        self,
+        *,
+        project_id: str | None,
+        kind: str,
+        source_uri: str,
+        status: str,
+        report: dict[str, Any],
+        generated_artifact_ids: tuple[str, ...] = (),
+        environment_id: str | None = None,
+        model_id: str | None = None,
+    ) -> HarnessBuildRecord:
+        record = HarnessBuildRecord(
+            id=str(uuid4()),
+            project_id=project_id or self.ensure_default_project().id,
+            kind=kind,
+            source_uri=source_uri,
+            status=status,
+            report_json=_dump(report),
+            generated_artifact_ids_json=_dump(generated_artifact_ids),
+            environment_id=environment_id,
+            model_id=model_id,
+        )
+        with self.database.session() as session:
+            session.add(record)
+            session.commit()
+        return record
+
+    def list_harness_builds(self, kind: str | None = None) -> list[HarnessBuildRecord]:
+        with self.database.session() as session:
+            query = select(HarnessBuildRecord)
+            if kind is not None:
+                query = query.where(HarnessBuildRecord.kind == kind)
+            return list(session.scalars(query.order_by(HarnessBuildRecord.created_at.desc())))
+
+    def get_harness_build(self, build_id: str) -> HarnessBuildRecord | None:
+        with self.database.session() as session:
+            return session.get(HarnessBuildRecord, build_id)
 
     def register_environment(
         self, *, record_id: str, version: str, content_hash: str, source_kind: str,

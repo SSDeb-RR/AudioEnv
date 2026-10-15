@@ -33,6 +33,18 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - RunPod quote, typed-confirmation, provisioning, cancellation, and budget-stop
   contracts are covered with a fake transport. Tests and startup never create
   paid compute.
+- The Harness Foundry accepts a local path or HTTPS GitHub repository, safely
+  inventories it, compiles validated `audioenv-task.json` inputs, recognizes
+  AudioEnv benchmark manifests, and emits a protected OCI scaffold for coding
+  repositories without importing or executing repository code.
+- Users can explicitly select Codex-assisted authoring. AudioEnv passes Codex
+  a bounded redacted digest, requires schema-constrained declarative output,
+  runs the candidate through deterministic validation, and keeps it in
+  `generated_needs_review`. No Codex call occurs implicitly.
+- Model onboarding detects the Qwen3-Omni family, selects its shared driver,
+  or creates a reviewable driver-conformance scaffold for an unknown model.
+  Caller and trainer choices in the run wizard are resolved from declared
+  capabilities instead of a hard-coded menu.
 
 ## Partial
 
@@ -66,17 +78,17 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-46 passed
+53 passed
 
 uv run audioenv validate
 341 passed, 0 failed
 
 cd web && npm run build && npm run test:e2e
 Vite production build passed
-1 Playwright product-flow test passed
+2 Playwright product-flow tests passed
 
 uv build
-audioenv_foundry-0.3.0 wheel and sdist built
+audioenv_foundry-0.4.0 wheel and sdist built
 ```
 
 The product-flow gates cover project creation, resource selection, preflight,

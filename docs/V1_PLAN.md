@@ -25,6 +25,13 @@ Pinned research integration revisions at audit time:
 
 ## Current milestone status
 
+- Dynamic foundry slice: harness plugin discovery, repository/benchmark
+  inspection, declarative environment compilation, unknown model scaffolding,
+  capability compatibility, persisted build records, and dashboard workflow
+  are implemented. Optional Codex authoring is schema-constrained, explicitly
+  invoked, redacted, and review-gated. Automatic execution of arbitrary
+  generated code remains gated on an OCI sandbox and independent validation.
+
 - Milestone 0: complete and verified.
 - Milestone 1: complete for the local product. `audioenv app` packages and
   serves the SPA/API, migrations, lifecycle, logs, projects, and recovery.

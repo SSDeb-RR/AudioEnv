@@ -31,3 +31,20 @@ test("create project, train, reload, compare, and export", async ({ page }) => {
   await page.goto("/evaluations");
   await expect(page.getByText(/24 samples/).first()).toBeVisible();
 });
+
+test("analyze repository and onboard an Omni model through the foundry", async ({ page }) => {
+  await page.goto("/foundry");
+  await page.getByLabel("Environment source").fill(".");
+  await page.getByRole("button", { name: "Build environment harness" }).click();
+  const environmentBuild = page.locator("details").filter({ hasText: "environment · coding_repository" }).first();
+  await expect(environmentBuild).toBeVisible();
+  await environmentBuild.evaluate((element: HTMLDetailsElement) => { element.open = true; });
+  await expect(environmentBuild.getByText(/configure and validate an OCI sandbox/)).toBeVisible();
+
+  await page.getByLabel("Foundry model ID").fill("Qwen/Qwen3-Omni-30B-A3B-Instruct");
+  await page.getByRole("button", { name: "Build model harness" }).click();
+  const modelBuild = page.locator("details").filter({ hasText: "model · qwen3-omni" }).first();
+  await expect(modelBuild).toBeVisible();
+  await modelBuild.evaluate((element: HTMLDetailsElement) => { element.open = true; });
+  await expect(modelBuild.getByText(/native-audio generation/)).toBeVisible();
+});
