@@ -46,7 +46,7 @@ reported as a preview, not AudioEnv V1 complete.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 78 tests passed, including executable Omni conformance, isolated declarative validation, signed promotion evidence, pinned VeRL launch/reward contracts, and the isolated tau2 controller |
+| V0 and V1 Python suite | PASS | 79 tests passed, including executable Omni conformance, isolated declarative validation, signed promotion evidence, pinned VeRL launch/reward contracts, the isolated tau2 controller, and the guarded Modal provider contract |
 | Built-in environment validation | PASS | 389 checks passed across all 48 tasks; 0 failed, including per-episode state isolation |
 | Python package build | PASS | `audioenv_foundry-0.5.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
 | Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
@@ -68,6 +68,7 @@ reported as a preview, not AudioEnv V1 complete.
 | Real Qwen native-audio episode | BLOCKED | No CUDA device or checkpoint on the audit host |
 | VeRL-Omni launch and reward contract | PASS, LIMITED | Launcher matches pinned V1 `main_omni` recipe and the hash-bound reward function is unit-tested; no CUDA execution yet |
 | VeRL-Omni GSPO and GRPO update | BLOCKED | Each algorithm still requires a separately approved multi-GPU worker and real agent-loop acceptance |
+| Modal execution-provider contract | PASS, LIMITED | Mock transport verifies immutable staging, fresh quote and typed confirmation, gVisor request, event replay, budget stop, cancellation, reconnect, and hash-checked artifact collection; live SDK and paid Sandbox run not executed |
 | Independent caller transfer | NOT RUN | Depends on the real native-audio training run |
 | Ten-point native-model learning lift | NOT RUN | Local proof exceeds the threshold but is explicitly ineligible as native Qwen evidence |
 | OCI coding sandbox | BLOCKED | No Docker-compatible runtime is installed |

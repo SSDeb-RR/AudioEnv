@@ -583,7 +583,7 @@ class TrajectoryV2(FrozenModel):
 
 class GPUExecutionPlanV1(FrozenModel):
     schema_version: Literal["audioenv.gpu-execution/v1"] = "audioenv.gpu-execution/v1"
-    provider: Literal["local-cuda", "runpod-secure-cloud"]
+    provider: Literal["local-cuda", "runpod-secure-cloud", "modal-sandbox"]
     image: str
     image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     gpu_type: str

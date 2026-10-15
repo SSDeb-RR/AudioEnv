@@ -189,6 +189,11 @@ def build_builtin_registry() -> HarnessRegistry:
             status="blocked", status_reason="live REST, SSH, and artifact transport not verified",
             capabilities=("cuda", "distributed", "persistent-volume"),
         ),
+        HarnessDescriptor(
+            id="modal-sandbox", kind="provider", display_name="Modal Sandbox",
+            status="blocked", status_reason="transport contract ready; live credentials and paid acceptance not run",
+            capabilities=("cuda", "distributed", "persistent-volume", "gvisor"),
+        ),
     )
     for descriptor in descriptors:
         registry.register(descriptor)

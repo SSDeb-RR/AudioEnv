@@ -39,6 +39,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - RunPod quote, typed-confirmation, provisioning, cancellation, and budget-stop
   contracts are covered with a fake transport. Tests and startup never create
   paid compute.
+- A Modal Sandbox provider uses the same immutable GPU-worker experiment and
+  event contracts. It implements quote hashing, exact-name confirmation,
+  gVisor runtime selection, named-secret references, volume staging,
+  contiguous event replay, budget/runtime stops, cancellation, reconnect, and
+  hash-verified artifact recovery behind an injected transport. Its live SDK
+  transport and paid acceptance remain intentionally blocked.
 - The Harness Foundry accepts a local path or HTTPS GitHub repository, safely
   inventories it, compiles validated `audioenv-task.json` inputs, recognizes
   AudioEnv benchmark manifests, and emits a protected OCI scaffold for coding
@@ -104,6 +110,8 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
   runtime/budget stops, reconnect, and SFTP command construction. Live API,
   SSH event streaming, and artifact collection are not verified.
+- Modal has a fully tested control-plane contract but not a concrete live SDK
+  transport or external Sandbox acceptance run.
 
 ## Blocked
 
@@ -119,13 +127,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - Repository execution remains unavailable until an OCI sandbox passes the
   specified network, privilege, filesystem, resource, socket, and secret tests.
 - Full duplex, interruption, telephony, Talker gradients, multi-tenancy,
-  billing, Kubernetes, and additional cloud providers are outside V1.
+  billing, Kubernetes, and additional cloud providers beyond RunPod and Modal
+  are outside V1.
 
 ## Verification evidence
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-78 passed
+79 passed
 
 uv run audioenv validate
 389 passed, 0 failed
