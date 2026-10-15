@@ -99,6 +99,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   native WAV bytes, and the client refuses non-loopback URLs. The GPU worker
   starts, health-checks, monitors, and stops this service separately from
   VeRL, with disjoint caller and trainer GPU allocations.
+- A protected tau2 native-episode controller now routes the private scenario
+  only to that caller service, passes only caller WAV and permitted tool
+  results to the policy, executes strict structured tool/speech envelopes,
+  records semantic turns for upstream evaluation, cleans up caller sessions,
+  and takes terminal reward from tau2's official evaluator. The remaining
+  work is the Qwen/VeRL policy port and multimodal postprocessing handoff.
 
 ## Partial
 
@@ -158,7 +164,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-91 passed
+94 passed
 
 uv run audioenv validate
 389 passed, 0 failed
