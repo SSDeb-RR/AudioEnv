@@ -42,11 +42,11 @@ the command, revision, hardware, and artifact path.
 Functional platform completion without the GPU and learning gates must be
 reported as a preview, not AudioEnv V1 complete.
 
-## Evidence recorded on 2026-10-15
+## Evidence recorded on 2026-10-16
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 53 tests passed, including harness foundry, Codex authoring-boundary, and API-to-worker product acceptance flows |
+| V0 and V1 Python suite | PASS | 64 tests passed, including harness foundry, Codex authoring-boundary, API-to-worker product acceptance flows, and pinned VeRL launch/reward contracts |
 | Built-in environment validation | PASS | 341 checks passed across all 48 tasks; 0 failed |
 | Python package build | PASS | `audioenv_foundry-0.5.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
 | Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
@@ -63,7 +63,8 @@ reported as a preview, not AudioEnv V1 complete.
 | Official EnvHarness type integration | PASS | Exact bridge test passed against pinned upstream commit |
 | Qwen3-Omni dependency probe | PASS | Dependencies import; probe correctly blocks on missing CUDA and local checkpoint without downloading |
 | Real Qwen native-audio episode | BLOCKED | No CUDA device or checkpoint on the audit host |
-| VeRL-Omni GSPO and GRPO update | BLOCKED | Code-ready launch plugins exist; each requires a separately approved multi-GPU worker |
+| VeRL-Omni launch and reward contract | PASS, LIMITED | Launcher matches pinned V1 `main_omni` recipe and the hash-bound reward function is unit-tested; no CUDA execution yet |
+| VeRL-Omni GSPO and GRPO update | BLOCKED | Each algorithm still requires a separately approved multi-GPU worker and real agent-loop acceptance |
 | Independent caller transfer | NOT RUN | Depends on the real native-audio training run |
 | Ten-point native-model learning lift | NOT RUN | Local proof exceeds the threshold but is explicitly ineligible as native Qwen evidence |
 | OCI coding sandbox | BLOCKED | No Docker-compatible runtime is installed |

@@ -22,6 +22,19 @@ caller, rollout seed data, environment manifest, CUDA topology, and resume
 checkpoint before launching VeRL-Omni. It exits rather than silently ignoring
 an unsupported configuration.
 
+The Qwen launcher mirrors the pinned VeRL-Omni V1 recipe: it invokes
+`verl_omni.trainer.main_omni`, selects the `qwen3_omni_moe` vLLM-Omni
+pipeline, uses FSDP2, excludes the Talker, codec, visual, and audio-tower
+modules, and applies LoRA only to `q_proj`, `k_proj`, `v_proj`, and `o_proj`.
+VeRL loads `audioenv.training.verl_plugin` in its driver and Ray workers. The
+plugin exposes a hash-bound reward function that ignores model-printed answers
+and accepts only the protected verifier result produced by the environment.
+
+This correct launch and reward boundary does not by itself prove the complete
+multi-turn Qwen caller/agent loop. That remains a GPU acceptance item until the
+agent loop has run against the pinned VeRL commit and emitted a validated
+native-audio trajectory.
+
 Cancellation is requested by creating the configured cancellation sentinel.
 The CPU trainer checks it at optimizer-step boundaries; the VeRL subprocess is
 terminated, then killed after a bounded grace period if necessary.

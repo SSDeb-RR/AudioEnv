@@ -14,6 +14,7 @@ from ..contracts import OnlineRLTrainerConfigV1, ResourceEstimate, TrainerCapabi
 
 
 PINNED_VERL_OMNI_COMMIT = "49dedb6ec0691588494b629fc1b610a86612966b"
+PINNED_VERL_COMMIT = "8a694930275061f52ebd538c906ef8819af56dbd"
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,24 +118,46 @@ class _VerlOmniTrainer:
             raise RuntimeError("invalid VeRL-Omni configuration: " + "; ".join(errors))
         loss_mode = "gspo" if self.algorithm == "gspo" else "vanilla"
         command = [
-            "python", "-m", "verl_omni.trainer.main_omni",
-            "--config-path=examples/omni_trainer/qwen3_omni/config",
-            "--config-name=qwen3_omni_thinker",
+            "python3", "-m", "verl_omni.trainer.main_omni",
+            f"data.train_files={config.dataset_path.resolve()}",
+            f"data.val_files={config.dataset_path.resolve()}",
+            "data.truncation=error",
+            "data.filter_overlong_prompts=true",
             f"actor_rollout_ref.model.path={config.model_path.resolve()}",
-            "actor_rollout_ref.model.architecture=Qwen3OmniMoeForConditionalGeneration",
-            "actor_rollout_ref.model.model_stage=thinker",
-            "actor_rollout_ref.rollout.pipeline_mode=thinker_only",
-            f"actor_rollout_ref.actor.policy_loss.loss_mode={loss_mode}",
-            "algorithm.trainer_type=policy_gradient", "algorithm.sample_source=online",
-            "algorithm.adv_estimator=grpo", f"actor_rollout_ref.rollout.n={config.group_size}",
-            f"actor_rollout_ref.actor.optim.lr={config.learning_rate}",
             f"actor_rollout_ref.model.lora_rank={config.lora_rank}",
             f"actor_rollout_ref.model.lora_alpha={config.lora_alpha}",
+            "actor_rollout_ref.model.lora_dtype=float32",
+            "actor_rollout_ref.model.lora.merge=True",
+            "actor_rollout_ref.model.enable_gradient_checkpointing=True",
+            "actor_rollout_ref.model.use_remove_padding=True",
+            "actor_rollout_ref.model.exclude_modules=.*talker.*|.*code2wav.*|.*code_predictor.*|.*visual.*|.*audio_tower.*",
             "actor_rollout_ref.model.target_modules=['q_proj','k_proj','v_proj','o_proj']",
-            f"data.train_files={config.dataset_path.resolve()}",
+            "actor_rollout_ref.actor.freeze_vision_tower=true",
+            "actor_rollout_ref.actor.strategy=fsdp2",
+            f"actor_rollout_ref.actor.optim.lr={config.learning_rate}",
+            "actor_rollout_ref.actor.use_kl_loss=false",
+            f"actor_rollout_ref.actor.policy_loss.loss_mode={loss_mode}",
+            "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean",
+            "actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16",
+            f"actor_rollout_ref.rollout.n={config.group_size}",
+            "actor_rollout_ref.rollout.name=vllm_omni",
+            "actor_rollout_ref.rollout.tensor_model_parallel_size=2",
+            "actor_rollout_ref.rollout.calculate_log_probs=True",
+            "actor_rollout_ref.rollout.enable_prefix_caching=False",
+            "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.output_mode=ar",
+            "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe",
+            "actor_rollout_ref.ref.strategy=fsdp2",
+            "actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16",
+            "algorithm.adv_estimator=grpo",
+            "algorithm.use_kl_in_reward=False",
+            "reward.reward_manager.source=register",
+            "reward.reward_manager.name=naive",
+            "reward.custom_reward_function.path=pkg://audioenv.training.verl_plugin",
+            "reward.custom_reward_function.name=compute_audioenv_score",
             f"trainer.n_gpus_per_node={config.gpus_per_node}", f"trainer.nnodes={config.nodes}",
             f"trainer.total_training_steps={config.max_steps}",
             f"trainer.default_local_dir={config.output_dir.resolve()}",
+            "trainer.val_before_train=false",
         ]
         if config.resume_from:
             command.extend(("trainer.resume_mode=resume_path", f"trainer.resume_from_path={config.resume_from.resolve()}"))
@@ -148,8 +171,10 @@ class _VerlOmniTrainer:
         }
         return {
             **os.environ, "AUDIOENV_VERL_PLUGIN": json.dumps(plugin, sort_keys=True),
-            "AUDIOENV_REWARD_MANAGER": "audioenv.training.verl_plugin:AudioEnvRewardManager",
-            "AUDIOENV_AGENT_LOOP": "audioenv.training.verl_plugin:AudioEnvVerlAgentLoop",
+            # VeRL imports these modules in the driver and Ray worker processes.
+            # Importing AudioEnv here makes its registered integration boundaries
+            # available without importing VeRL in the local control plane.
+            "VERL_USE_EXTERNAL_MODULES": "verl_omni,audioenv.training.verl_plugin",
         }
 
 

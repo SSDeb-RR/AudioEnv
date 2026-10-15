@@ -1,6 +1,6 @@
 # AudioEnv V1 implementation status
 
-Verified on 2026-10-15 on an Apple M4 MacBook Air with 16 GB RAM and no CUDA
+Verified on 2026-10-16 on an Apple M4 MacBook Air with 16 GB RAM and no CUDA
 device. `working` means executed successfully; `partial` means a real boundary
 exists but its external gate has not passed; `blocked` requires unavailable
 hardware, credentials, or approval; `missing` means no implementation exists.
@@ -62,9 +62,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - `TrajectoryV2` validates multimodal feature references, prompt/response
   positions, response-only masks, rollout log-probabilities, policy version,
   audio lineage, episode termination, and reward provenance.
-- Distinct Qwen3-Omni Thinker trainer plugins now emit GSPO and GRPO loss
-  configurations against pinned VeRL-Omni v0.2. Both use grouped GRPO outcome
-  advantages and reject groups smaller than two.
+- Distinct Qwen3-Omni Thinker trainer plugins now emit the pinned VeRL-Omni
+  V1 `main_omni` recipe for GSPO and GRPO. The command selects the actual
+  vLLM-Omni Qwen pipeline, FSDP2, Thinker-only LoRA targets, grouped GRPO
+  advantages, and a protected AudioEnv reward function. The prior obsolete
+  config-path launcher and fictitious hook environment variables were removed.
 
 ## Partial
 
@@ -74,7 +76,8 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   host. Full upstream communication-reward parity is not claimed.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
   alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
-  export. It has not run inside the pinned CUDA VeRL worker.
+  export. The pinned VeRL agent-loop API and reward-loading API have been
+  audited, but AudioEnv's model-driven loop has not yet run inside that worker.
 - RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
   runtime/budget stops, reconnect, and SFTP command construction. Live API,
   SSH event streaming, and artifact collection are not verified.
@@ -99,7 +102,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-63 passed
+64 passed
 
 uv run audioenv validate
 341 passed, 0 failed

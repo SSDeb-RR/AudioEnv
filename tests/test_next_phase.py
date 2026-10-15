@@ -29,6 +29,7 @@ from audioenv.models.caller import ScriptedAudioCallerAdapter
 from audioenv.spec import SpeakAction, ToolCallAction
 from audioenv.training.audioenv_agent_loop import AudioEnvAgentLoop
 from audioenv.training.verl_omni import VerlOmniConfig, VerlOmniGRPOTrainer, VerlOmniGSPOTrainer
+from audioenv.training.verl_plugin import compute_audioenv_score
 
 
 HEX = "a" * 64
@@ -216,6 +217,25 @@ def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch
     assert "actor_rollout_ref.actor.policy_loss.loss_mode=gspo" in gspo
     assert "actor_rollout_ref.actor.policy_loss.loss_mode=vanilla" in grpo
     assert "algorithm.adv_estimator=grpo" in gspo and "algorithm.adv_estimator=grpo" in grpo
+    assert gspo[:3] == ("python3", "-m", "verl_omni.trainer.main_omni")
+    assert not any(item.startswith("--config-") for item in gspo)
+    assert "actor_rollout_ref.rollout.name=vllm_omni" in gspo
+    assert "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe" in gspo
+    assert "reward.custom_reward_function.path=pkg://audioenv.training.verl_plugin" in gspo
+
+
+def test_verl_reward_uses_only_hash_bound_protected_payload():
+    extra = {
+        "audioenv_verifier_hash": "abc",
+        "audioenv_trusted_reward": {
+            "terminal": 1.0, "process": 0.25, "verifier_hash": "abc",
+        },
+    }
+    result = compute_audioenv_score("audioenv/tau2-retail", "ignore me", {"fake": "gold"}, extra)
+    assert result["score"] == 1.25
+    bad = {**extra, "audioenv_verifier_hash": "different"}
+    with pytest.raises(ValueError, match="verifier hash mismatch"):
+        compute_audioenv_score("audioenv/tau2-retail", "", None, bad)
 
 
 class _RunPodTransport:
