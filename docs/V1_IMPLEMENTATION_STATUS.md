@@ -79,7 +79,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   verifier-immutability gates must all pass.
 - `TrajectoryV2` validates multimodal feature references, prompt/response
   positions, response-only masks, rollout log-probabilities, policy version,
-  audio lineage, episode termination, and reward provenance.
+  audio lineage, episode termination, and reward provenance. Training turns
+  preserve either flat positions or Qwen-style multi-channel multimodal RoPE
+  positions end to end instead of flattening them at the trainer boundary.
 - Distinct Qwen3-Omni Thinker trainer plugins now emit the pinned VeRL-Omni
   V1 `main_omni` recipe for GSPO and GRPO. The command selects the actual
   vLLM-Omni Qwen pipeline, FSDP2, Thinker-only LoRA targets, grouped GRPO
@@ -143,7 +145,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-84 passed
+85 passed
 
 uv run audioenv validate
 389 passed, 0 failed

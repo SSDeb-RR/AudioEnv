@@ -520,7 +520,7 @@ class TrainingTurnV2(FrozenModel):
     generated_ids: tuple[int, ...]
     attention_mask: tuple[int, ...]
     response_mask: tuple[int, ...]
-    position_ids: tuple[int, ...]
+    position_ids: tuple[int, ...] | tuple[tuple[int, ...], ...]
     rollout_logprobs: tuple[float, ...]
     multimodal_features: tuple[MultimodalFeatureRefV1, ...]
     action: dict[str, Any]
@@ -530,8 +530,14 @@ class TrainingTurnV2(FrozenModel):
     @model_validator(mode="after")
     def validate_training_alignment(self) -> "TrainingTurnV2":
         total = len(self.input_ids) + len(self.generated_ids)
-        if len(self.attention_mask) != total or len(self.position_ids) != total:
-            raise ValueError("attention and position data must span prompt plus response")
+        if len(self.attention_mask) != total:
+            raise ValueError("attention data must span prompt plus response")
+        if self.position_ids and isinstance(self.position_ids[0], tuple):
+            widths = {len(channel) for channel in self.position_ids}
+            if widths != {total}:
+                raise ValueError("multimodal position channels must span prompt plus response")
+        elif len(self.position_ids) != total:
+            raise ValueError("position data must span prompt plus response")
         if len(self.response_mask) != len(self.generated_ids):
             raise ValueError("response mask must align with generated ids")
         if len(self.rollout_logprobs) != len(self.generated_ids):

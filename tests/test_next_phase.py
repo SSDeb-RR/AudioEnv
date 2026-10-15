@@ -69,6 +69,23 @@ def _trajectory(reward: float, seed: int) -> TrajectoryV2:
     )
 
 
+def test_trajectory_v2_preserves_multichannel_audio_rope_positions():
+    original = _trajectory(1.0, 1)
+    turn = original.turns[0].model_copy(update={
+        "position_ids": ((0, 1, 2, 3), (0, 0, 1, 1), (0, 0, 0, 1)),
+    })
+    trace = original.model_copy(update={"turns": (turn,)})
+    peer = trace.model_copy(update={"episode_id": "ep-2", "seed": 2})
+    batch = AudioEnvAgentLoop.to_verl_batch((trace, peer))
+    assert batch.position_ids[0] == turn.position_ids
+
+    with pytest.raises(ValueError, match="multimodal position channels"):
+        TrainingTurnV2(**{
+            **turn.model_dump(),
+            "position_ids": ((0, 1), (0, 1, 2, 3)),
+        })
+
+
 def test_promotion_requires_all_gates_and_immutable_verifier():
     checks = {name: True for name in (
         "sandbox_build", "oracle_pass", "noop_fail", "adversarial_fail",

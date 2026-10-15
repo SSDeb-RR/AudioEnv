@@ -16,7 +16,7 @@ class VerlOmniBatch:
     generated_ids: tuple[tuple[int, ...], ...]
     rollout_logprobs: tuple[tuple[float, ...], ...]
     response_masks: tuple[tuple[int, ...], ...]
-    position_ids: tuple[tuple[int, ...], ...]
+    position_ids: tuple[tuple[int, ...] | tuple[tuple[int, ...], ...], ...]
     rewards: tuple[float, ...]
     group_ids: tuple[str, ...]
     policy_versions: tuple[str, ...]
