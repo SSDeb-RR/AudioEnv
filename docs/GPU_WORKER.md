@@ -24,11 +24,16 @@ an unsupported configuration.
 
 The Qwen launcher mirrors the pinned VeRL-Omni V1 recipe: it invokes
 `verl_omni.trainer.main_omni`, selects the `qwen3_omni_moe` vLLM-Omni
-pipeline, uses FSDP2, excludes the Talker, codec, visual, and audio-tower
-modules, and applies LoRA only to `q_proj`, `k_proj`, `v_proj`, and `o_proj`.
+full pipeline for rollouts, uses FSDP2, excludes the Talker, codec, visual, and
+audio-tower modules from optimization, and applies LoRA only to `q_proj`,
+`k_proj`, `v_proj`, and `o_proj`.
 VeRL loads `audioenv.training.verl_plugin` in its driver and Ray workers. The
 plugin exposes a hash-bound reward function that ignores model-printed answers
 and accepts only the protected verifier result produced by the environment.
+The pinned native-audio bridge retains stage-0 Thinker tokens/log-probabilities
+and the stage-2 Code2Wav waveform from the same vLLM-Omni request. It fails
+closed if either output is absent, preventing an unrelated TTS waveform from
+being attached to a trainable action.
 
 This correct launch and reward boundary does not by itself prove the complete
 multi-turn Qwen caller/agent loop. That remains a GPU acceptance item until the

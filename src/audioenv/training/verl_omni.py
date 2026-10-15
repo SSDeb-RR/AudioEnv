@@ -146,6 +146,7 @@ class _VerlOmniTrainer:
             "actor_rollout_ref.rollout.enable_prefix_caching=False",
             "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.output_mode=ar",
             "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe",
+            "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_mode=full",
             "actor_rollout_ref.rollout.agent.default_agent_loop=audioenv_agent",
             "actor_rollout_ref.ref.strategy=fsdp2",
             "actor_rollout_ref.ref.fsdp_config.model_dtype=bfloat16",
@@ -173,6 +174,7 @@ class _VerlOmniTrainer:
         return {
             **os.environ, "AUDIOENV_VERL_PLUGIN": json.dumps(plugin, sort_keys=True),
             "AUDIOENV_VERL_ROLLOUT_FACTORY": "audioenv.training.verl_runtime:run_audioenv_trajectory",
+            "AUDIOENV_ENABLE_NATIVE_AUDIO_BRIDGE": "1",
             # VeRL imports these modules in the driver and Ray worker processes.
             # Importing AudioEnv here makes its registered integration boundaries
             # available without importing VeRL in the local control plane.

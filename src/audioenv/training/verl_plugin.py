@@ -14,6 +14,11 @@ from typing import Any, Callable
 
 from ..contracts import TrajectoryV2
 
+if os.environ.get("AUDIOENV_ENABLE_NATIVE_AUDIO_BRIDGE") == "1":
+    from .vllm_audio_bridge import install_native_audio_bridge
+
+    install_native_audio_bridge()
+
 try:  # Imported only inside the pinned CUDA worker environment.
     from verl.experimental.agent_loop.agent_loop import (
         AgentLoopBase as _VerlAgentLoopBase,

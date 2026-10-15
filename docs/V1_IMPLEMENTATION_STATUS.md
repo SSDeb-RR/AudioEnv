@@ -87,6 +87,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   vLLM-Omni Qwen pipeline, FSDP2, Thinker-only LoRA targets, grouped GRPO
   advantages, and a protected AudioEnv reward function. The prior obsolete
   config-path launcher and fictitious hook environment variables were removed.
+- The Qwen rollout now selects vLLM-Omni's full Thinker → Talker → Code2Wav
+  pipeline. A revision-pinned bridge retains the stage-0 policy tokens and
+  log-probabilities plus the stage-2 waveform from the same generation request
+  and fails closed if either is absent. This closes the prior architectural
+  gap where Thinker-only rollout could not produce natively bound agent audio;
+  CUDA execution of the bridge remains a release gate.
 
 ## Partial
 
@@ -145,7 +151,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-85 passed
+87 passed
 
 uv run audioenv validate
 389 passed, 0 failed

@@ -259,6 +259,7 @@ def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch
     assert not any(item.startswith("--config-") for item in gspo)
     assert "actor_rollout_ref.rollout.name=vllm_omni" in gspo
     assert "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe" in gspo
+    assert "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_mode=full" in gspo
     assert "actor_rollout_ref.rollout.agent.default_agent_loop=audioenv_agent" in gspo
     assert "reward.custom_reward_function.path=pkg://audioenv.training.verl_plugin" in gspo
 
