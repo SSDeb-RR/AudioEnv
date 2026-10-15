@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .adapter import EnvironmentPackage
+from .audio import validate_audio_profile
 from .runtime import AudioEnvironment
 from .spec import SpeakAction, ToolCallAction
 
@@ -38,6 +39,13 @@ def validate_package(package: EnvironmentPackage) -> ValidationReport:
     tool_names = {tool.name for tool in package.spec.tools}
     handlers_ok = tool_names == set(package.tool_handlers)
     checks.append(CheckResult("tool_handlers_complete", handlers_ok, f"{len(tool_names)} declared tools"))
+    for profile in package.spec.audio_profiles:
+        try:
+            validate_audio_profile(profile)
+            profile_ok, details = True, "implemented audio transformations only"
+        except ValueError as exc:
+            profile_ok, details = False, str(exc)
+        checks.append(CheckResult(f"audio_profile:{profile.id}", profile_ok, details))
 
     for task in package.tasks:
         known_tools = all(expectation.name in tool_names for expectation in task.required_tools)
@@ -82,6 +90,15 @@ def validate_package(package: EnvironmentPackage) -> ValidationReport:
             mutant.step(SpeakAction(b"finish", "finished", True))
             rejected = not bool(mutant.trace.final_metrics.get("terminal_pass"))
             checks.append(CheckResult(f"{task.id}:reward_mutation", rejected, "wrong arguments rejected"))
+
+        if len(task.required_tools) > 1:
+            wrong_order = AudioEnvironment(package)
+            wrong_order.reset(task.id, seed=41, model_id="wrong-order")
+            later = task.required_tools[1]
+            wrong_order.step(ToolCallAction(later.name, dict(later.arguments)))
+            wrong_order.step(SpeakAction(b"finish", " ".join(task.required_communications), True))
+            rejected = not bool(wrong_order.trace.final_metrics.get("terminal_pass"))
+            checks.append(CheckResult(f"{task.id}:wrong_order", rejected, "out-of-order milestone rejected"))
 
     return ValidationReport(tuple(checks))
 

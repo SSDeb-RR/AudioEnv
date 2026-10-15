@@ -1,5 +1,11 @@
 # AudioEnv Foundry
 
+> **V1 status: local platform preview.** The repository now contains a real
+> CPU policy-update workflow, persistent experiment lifecycle, API, dashboard,
+> checkpoint reload, and evaluation records. Native Qwen3-Omni inference and
+> VeRL-Omni training are implemented behind strict probes but remain unverified
+> on this non-CUDA host. See [`docs/V1_ACCEPTANCE_CRITERIA.md`](docs/V1_ACCEPTANCE_CRITERIA.md).
+
 AudioEnv Foundry is an Apache-2.0, trainer-neutral foundation for turning
 structured agent benchmarks into deterministic, turn-based, audio-native RL
 environments.
@@ -22,6 +28,20 @@ closed-model RL.
 - Leakage-safe public export plus separately stored private verifier material.
 - Local parallel rollouts and trainer-neutral JSONL export with tokens/logprobs.
 - Optional OpenEnv, Verifiers, and Qwen2.5-Omni integration boundaries.
+- Versioned V1 environment, generation, trajectory, model-capability, trainer,
+  and resource-estimate contracts with alignment validation.
+- Declarative custom-environment authoring with separately stored protected
+  verifier artifacts.
+- EnvHarness-compatible bridge plus safe `Setup` and restricted `Rules`
+  adaptations that retain the original evaluator.
+- SQLite/SQLAlchemy experiment persistence, enforced lifecycle transitions,
+  metrics, evaluations, artifacts, cancellation, worker heartbeats, and
+  abandoned-worker recovery.
+- FastAPI service and React/TypeScript dashboard driven by persisted records.
+- A genuine Torch policy-gradient CPU proof with parameter updates, checkpoint
+  save/reload, and baseline-versus-trained evaluation.
+- Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
+  capability and hardware preflight failures.
 
 The bundled WAV renderer generates deterministic audio fixtures for tests. It
 is not a speech synthesizer. A real deployment must inject a native-audio user
@@ -37,6 +57,18 @@ uv run audioenv validate
 uv run audioenv demo --domain retail --trajectory oracle --output outputs/retail-trace.json
 uv run audioenv demo --domain telecom --trajectory wrong
 uv run audioenv export outputs/reference-environment
+
+# V1 local platform and real CPU optimizer proof
+uv sync --extra dev --extra platform --extra train
+uv run audioenv platform-demo --root outputs/platform-demo --steps 40
+cd web && npm install && cd ..
+uv run audioenv dev --database outputs/platform-demo/audioenv.db
+
+# `audioenv dev` supervises the loopback API and dashboard. Training workers
+# are started as local subprocesses only after an explicitly confirmed launch.
+
+# This does not download weights; it reports why Qwen is or is not available.
+uv run --extra qwen audioenv qwen-probe
 ```
 
 An oracle trajectory should end with `terminal_pass: true`; no-op and wrong-slot
@@ -109,20 +141,26 @@ event so trainers can choose whether and how to combine shaping.
 
 ## Model and trainer integration
 
-`NativeAudioModelAdapter` returns the environment action alongside token IDs,
-log-probabilities, and metadata. `RolloutWorker` writes those values into the
-trace and `export_trainer_jsonl` produces trainer-neutral JSONL.
+The legacy `NativeAudioModelAdapter` remains compatible with V0 callback-based
+integrations. V1 adds `GenerationRecord` and `TrajectoryV1`: action tokens,
+response masks, multimodal positions, old-policy log-probabilities, audio
+artifacts, policy versions, and episode boundaries are validated together.
 
-`Qwen25OmniAdapter` accepts an injected generation callback. Model loading,
-device placement, vLLM serving, LoRA updates, and the GRPO optimizer remain in
-the lab's existing stack.
+`Qwen3OmniAgentAdapter` and `Qwen3OmniCallerAdapter` use the upstream
+Transformers processor/model interfaces, preserve semantic-token/Talker-audio
+binding, and parse constrained structured tool envelopes. Their `probe()` does
+not download weights and reports missing CUDA, checkpoint, dependency, and
+capacity requirements explicitly. The CPU `TinyAudioPolicyTrainer` is a real
+optimizer mechanics proof; `VerlOmniGSPOTrainer` is a strict pinned launch
+boundary for the external CUDA trainer and is not represented as having run on
+this host.
 
 Install optional integrations only when needed:
 
 ```bash
 uv sync --extra qwen
-uv sync --extra openenv
-uv sync --extra verifiers
+uv sync --extra train
+uv sync --extra envharness
 ```
 
 The OpenEnv integration implements its `reset`, `step`, and `state` server-side
@@ -132,15 +170,17 @@ task rows and an in-process runtime; it never exposes verifier truth.
 ## Repository map
 
 ```text
-src/audioenv/spec.py          canonical public contracts
-src/audioenv/runtime.py       isolated episode execution
+src/audioenv/contracts.py     versioned V1 IR, trajectory, and capabilities
+src/audioenv/runtime.py       isolated episode execution and action binding
 src/audioenv/rewards.py       process and terminal verification
 src/audioenv/validation.py    pre-training integrity checks
-src/audioenv/rollout.py       parallel rollouts and trainer export
-src/audioenv/adapters/        benchmark conversion SDK
-src/audioenv/integrations/    optional OpenEnv and Verifiers bridges
-src/audioenv/models/          native-audio model adapter boundary
-src/audioenv/reference.py     retail and telecom reference package
+src/audioenv/rollout_v1.py    validated V1 rollout collection
+src/audioenv/adapters/        benchmark conversion SDK and tau2 importer
+src/audioenv/integrations/    optional ecosystem compatibility bridges
+src/audioenv/models/          scripted and Qwen3-Omni adapter implementations
+src/audioenv/training/        CPU trainer and VeRL-Omni launch boundary
+src/audioenv/platform/        API, persistence, worker, execution, and exports
+web/                          React/TypeScript operator dashboard
 ```
 
 ## Release gates not claimed by this repository
@@ -148,7 +188,7 @@ src/audioenv/reference.py     retail and telecom reference package
 The following require external resources and are deliberately not represented
 as completed:
 
-- a Qwen2.5-Omni-7B baseline and LoRA/GRPO training run;
+- a Qwen3-Omni-30B-A3B baseline and Thinker LoRA/GSPO training run;
 - a ten-point held-out pass@1 improvement;
 - transfer to an independent native-audio caller;
 - GPU throughput and cost measurements;
@@ -157,4 +197,27 @@ as completed:
 
 The executable foundation is ready for those experiments, but none should be
 claimed until its corresponding evidence exists.
+
+## Dashboard
+
+The dashboard exposes Overview, Models, Benchmarks & Tasks, Environments,
+Training Runs, Evaluations, Artifacts, and Settings. It reads only backend
+records. Missing cost, GPU, evaluation, or model-probe data is displayed as
+unavailable rather than replaced with demo values.
+
+Production frontend build:
+
+```bash
+cd web
+npm install
+npm audit
+npm run build
+```
+
+## V1 documents
+
+- [`docs/V1_AUDIT.md`](docs/V1_AUDIT.md)
+- [`docs/V1_ARCHITECTURE.md`](docs/V1_ARCHITECTURE.md)
+- [`docs/V1_PLAN.md`](docs/V1_PLAN.md)
+- [`docs/V1_ACCEPTANCE_CRITERIA.md`](docs/V1_ACCEPTANCE_CRITERIA.md)
 

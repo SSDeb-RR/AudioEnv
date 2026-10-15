@@ -145,7 +145,7 @@ def build_reference_package() -> EnvironmentPackage:
         ),
         audio_profiles=(
             AudioProfile(),
-            AudioProfile(id="degraded-en", noise_snr_db=12.0, codec="opus", speaking_rate=1.15, prosody="insistent"),
+            AudioProfile(id="degraded-en", noise_snr_db=12.0, codec="pcm_s16le", speaking_rate=1.15),
         ),
         max_steps=12,
     )

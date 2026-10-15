@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict
+from hashlib import sha256
 import time
 from typing import Any
 from uuid import uuid4
 
 from .adapter import EnvironmentPackage, ToolResult
+from .contracts import GenerationRecord
 from .audio import AudioRenderer, DeterministicWavFixtureRenderer
 from .rewards import RewardTracker, total_reward
 from .spec import Action, AudioObservation, AudioProfile, JSONValue, SpeakAction, ToolCallAction
@@ -135,6 +137,43 @@ class AudioEnvironment:
         if self._done:
             self._trace.final_metrics = metrics
         return observation
+
+    def step_generation(self, action: Action, generation: GenerationRecord) -> AudioObservation:
+        """Execute an action only after binding it to trusted model output.
+
+        V1 rollout workers use this method. The legacy ``step`` remains for
+        hand-authored tests and backward compatibility.
+        """
+        if isinstance(action, SpeakAction):
+            if action.semantic_text != generation.semantic_text:
+                raise ValueError("spoken semantic text is not bound to the generation record")
+            audio_hash = sha256(action.audio).hexdigest()
+            if generation.audio_artifact_id != audio_hash:
+                raise ValueError("spoken audio is not bound to the generation record")
+            if generation.tool_call is not None:
+                raise ValueError("speech action cannot carry a generated tool call")
+        elif isinstance(action, ToolCallAction):
+            expected = {"tool_call": {"name": action.name, "arguments": action.arguments}}
+            if generation.tool_call != expected:
+                raise ValueError("tool action is not bound to the generation record")
+        else:  # pragma: no cover - guarded by the public Action union
+            raise TypeError(f"unsupported action: {type(action)!r}")
+        return self.step(
+            action,
+            training={
+                "generation_id": generation.generation_id,
+                "model_revision": generation.model_revision,
+                "policy_version": generation.policy_version,
+                "input_ids": list(generation.input_ids),
+                "generated_ids": list(generation.generated_ids),
+                "attention_mask": list(generation.attention_mask),
+                "action_mask": list(generation.action_mask),
+                "old_logprobs": list(generation.old_logprobs),
+                "position_ids": list(generation.position_ids) if generation.position_ids else None,
+                "speech_token_ids": list(generation.speech_token_ids),
+                "audio_artifact_id": generation.audio_artifact_id,
+            },
+        )
 
     @property
     def trace(self) -> EpisodeTrace:

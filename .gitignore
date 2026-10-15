@@ -6,6 +6,10 @@ __pycache__/
 .env
 .env.*
 dist/
+web/dist/
+web/node_modules/
+*.tsbuildinfo
+.audioenv/
 build/
 *.egg-info/
 outputs/

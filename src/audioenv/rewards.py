@@ -41,9 +41,11 @@ class RewardTracker:
                 events.append(RewardEvent("repeated_failed_call", -0.1, "process", {"tool": action.name}))
             self.failed_call_keys.add(call_key)
             return tuple(events)
-        for index, expected in enumerate(self.task.required_tools):
-            if index in self.matched_milestones:
-                continue
+        # Milestones are ordered. A later valid call cannot collect progress
+        # before its prerequisites and then retroactively satisfy the task.
+        index = len(self.matched_milestones)
+        if index < len(self.task.required_tools):
+            expected = self.task.required_tools[index]
             if action.name == expected.name and action.arguments == expected.arguments:
                 self.matched_milestones.add(index)
                 events.append(
@@ -54,7 +56,6 @@ class RewardTracker:
                         {"tool": action.name},
                     )
                 )
-                break
         return tuple(events)
 
     def record_speech(self, semantic_text: str | None) -> None:
