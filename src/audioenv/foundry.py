@@ -37,6 +37,7 @@ from .harnesses import (
 )
 from .harnesses.codex_author import CodexEnvironmentAuthor
 from .validation import ValidationReport, validate_package
+from .models.scaffold import build_driver_scaffold
 from .integrations.repo2rlenv import DockerSandboxExecutor, Repo2RLEnvGenerator
 
 
@@ -271,7 +272,7 @@ class ModelFoundry:
             )
             return ModelOnboardingReport(
                 model_id=model_id, source=source, detected_family=family, selected_driver=driver,
-                status="blocked", capabilities=capabilities,
+                status="blocked", registration_state="generated_needs_review", capabilities=capabilities,
                 conformance_checks=tuple(checks),
                 compatible_trainers=tuple(
                     item.harness_id for item in compatibility.trainers
@@ -279,22 +280,13 @@ class ModelFoundry:
                 ),
                 review_items=("run the CUDA load, native-audio generation, log-probability, LoRA, and reload conformance gates",),
             )
-        scaffold = {
-            "schema_version": "audioenv.model-driver-scaffold/v1",
-            "model_id": model_id,
-            "source": source,
-            "detected_family": family,
-            "required_methods": [
-                "probe", "load", "generate_step", "save_adapter", "load_adapter",
-            ],
-            "required_conformance": [
-                "native_audio_input", "structured_action", "token_logprobs", "mask_alignment", "checkpoint_reload",
-            ],
-        }
-        artifact = self.artifacts.put_json(scaffold)
+        artifact = self.artifacts.put_bytes(
+            build_driver_scaffold(model_id, source, family), media_type="application/zip",
+        )
         return ModelOnboardingReport(
             model_id=model_id, source=source, detected_family=family, selected_driver=None,
-            status="needs_review", conformance_checks=tuple(checks), generated_files=(artifact.id,),
+            status="needs_review", registration_state="generated_needs_review",
+            conformance_checks=tuple(checks), generated_files=(artifact.id,),
             review_items=("implement the generated architecture-family driver and pass its conformance suite",),
         )
 

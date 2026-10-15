@@ -128,7 +128,7 @@ class GenerationRecord(FrozenModel):
     attention_mask: tuple[int, ...]
     action_mask: tuple[int, ...]
     old_logprobs: tuple[float, ...]
-    position_ids: tuple[int, ...] | None = None
+    position_ids: tuple[int, ...] | tuple[tuple[int, ...], ...] | None = None
     speech_token_ids: tuple[int, ...] = ()
     audio_artifact_id: str | None = None
     tool_call: dict[str, Any] | None = None
@@ -141,8 +141,13 @@ class GenerationRecord(FrozenModel):
             raise ValueError("action_mask must align with generated ids")
         if len(self.old_logprobs) != len(self.generated_ids):
             raise ValueError("old_logprobs must align with generated ids")
-        if self.position_ids is not None and len(self.position_ids) != len(self.attention_mask):
-            raise ValueError("position_ids must align with attention_mask")
+        if self.position_ids is not None:
+            if self.position_ids and isinstance(self.position_ids[0], tuple):
+                widths = {len(channel) for channel in self.position_ids}
+                if widths != {len(self.attention_mask)}:
+                    raise ValueError("multimodal position channels must align with attention_mask")
+            elif len(self.position_ids) != len(self.attention_mask):
+                raise ValueError("position_ids must align with attention_mask")
         if not all(math.isfinite(value) for value in self.old_logprobs):
             raise ValueError("old_logprobs must be finite")
         if not any(self.action_mask):
@@ -465,12 +470,15 @@ class ModelConformanceReportV1(FrozenModel):
     driver_id: str
     checks: tuple[ConformanceCheckV1, ...]
     registered: bool
+    registration_state: Literal["certified", "conformant", "generated_needs_review", "rejected"] = "generated_needs_review"
     generated_artifact_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def registration_requires_all_checks(self) -> "ModelConformanceReportV1":
         if self.registered and (not self.checks or not all(item.passed for item in self.checks)):
             raise ValueError("a model driver can register only after every conformance check passes")
+        if self.registered != (self.registration_state in {"certified", "conformant"}):
+            raise ValueError("registration state must agree with registered")
         return self
 
 

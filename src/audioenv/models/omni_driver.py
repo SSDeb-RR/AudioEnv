@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+import tempfile
 from typing import Any, Protocol
 
 from ..contracts import (
@@ -32,6 +33,17 @@ class OmniModelDriver(Protocol):
     def parameter_hash(self, *, trainable_only: bool = True) -> str: ...
     def save_adapter(self, destination: Path) -> Path: ...
     def load_adapter(self, source: Path) -> None: ...
+    def conformance_optimizer_step(self, record: GenerationRecord) -> "OptimizerStepEvidence": ...
+    def conformance_checkpoint_roundtrip(self, destination: Path, fixture: "ConformanceFixture") -> bool: ...
+    def conformance_deterministic_probe(self, fixture: "ConformanceFixture") -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizerStepEvidence:
+    before_hash: str
+    after_hash: str
+    gradient_parameter_names: tuple[str, ...]
+    optimizer_state_changed: bool
 
 
 class Qwen3OmniDriver:
@@ -104,6 +116,18 @@ class Qwen3OmniDriver:
     def load_adapter(self, source: Path) -> None:
         self.adapter.load_adapter(source)
 
+    def conformance_optimizer_step(self, record: GenerationRecord) -> OptimizerStepEvidence:
+        del record
+        raise RuntimeError("Qwen optimizer-step conformance must run in the pinned CUDA worker")
+
+    def conformance_checkpoint_roundtrip(self, destination: Path, fixture: "ConformanceFixture") -> bool:
+        del destination, fixture
+        raise RuntimeError("Qwen checkpoint conformance must run in the pinned CUDA worker")
+
+    def conformance_deterministic_probe(self, fixture: "ConformanceFixture") -> bool:
+        del fixture
+        raise RuntimeError("Qwen deterministic probe must run in the pinned CUDA worker")
+
 
 @dataclass(frozen=True, slots=True)
 class ConformanceFixture:
@@ -116,8 +140,8 @@ class ModelConformanceRunner:
 
     check_names = (
         "dependency_probe", "native_audio_inference", "structured_action",
-        "token_logprob_alignment", "mask_isolation", "declared_gradients",
-        "lora_update", "checkpoint_reload",
+        "token_logprob_alignment", "multimodal_positions", "mask_isolation",
+        "declared_gradients", "lora_update", "checkpoint_reload", "deterministic_probe",
     )
 
     def run(self, driver: OmniModelDriver, fixture: ConformanceFixture) -> ModelConformanceReportV1:
@@ -134,7 +158,7 @@ class ModelConformanceRunner:
             ) for name in self.check_names[1:])
             return ModelConformanceReportV1(
                 model_id=driver.model_id, driver_id=driver.driver_id,
-                checks=tuple(checks), registered=False,
+                checks=tuple(checks), registered=False, registration_state="rejected",
             )
         try:
             driver.load()
@@ -150,6 +174,18 @@ class ModelConformanceRunner:
             ))
             aligned = len(record.generated_ids) == len(record.old_logprobs) == len(record.action_mask)
             checks.append(ConformanceCheckV1(name="token_logprob_alignment", passed=aligned))
+            positions = record.position_ids
+            position_width = 0
+            if positions and isinstance(positions[0], tuple):
+                position_width = len(positions[0])
+            elif positions:
+                position_width = len(positions)
+            checks.append(ConformanceCheckV1(
+                name="multimodal_positions",
+                passed=position_width == len(record.attention_mask),
+                evidence={"position_width": position_width, "sequence_width": len(record.attention_mask)},
+                reason=None if position_width == len(record.attention_mask) else "position data is missing or misaligned",
+            ))
             checks.append(ConformanceCheckV1(
                 name="mask_isolation", passed=aligned and all(value in {0, 1} for value in record.action_mask)
                 and any(record.action_mask),
@@ -161,21 +197,32 @@ class ModelConformanceRunner:
             checks.append(ConformanceCheckV1(
                 name="declared_gradients", passed=declared, evidence={"parameters": list(names)},
             ))
-            # The GPU acceptance worker replaces this structural check with an optimizer step.
+            update = driver.conformance_optimizer_step(record)
+            gradients_ok = bool(update.gradient_parameter_names) and all(
+                name in names for name in update.gradient_parameter_names
+            )
             checks.append(ConformanceCheckV1(
-                name="lora_update", passed=False,
-                reason="requires the GPU optimizer-step acceptance phase",
+                name="lora_update",
+                passed=update.before_hash != update.after_hash and update.optimizer_state_changed and gradients_ok,
+                evidence={
+                    "before_hash": update.before_hash, "after_hash": update.after_hash,
+                    "gradient_parameter_names": list(update.gradient_parameter_names),
+                    "optimizer_state_changed": update.optimizer_state_changed,
+                },
             ))
-            checks.append(ConformanceCheckV1(
-                name="checkpoint_reload", passed=False,
-                reason="requires the GPU save/reload acceptance phase",
-            ))
+            with tempfile.TemporaryDirectory(prefix="audioenv-model-conformance-") as directory:
+                reloaded = driver.conformance_checkpoint_roundtrip(Path(directory), fixture)
+            checks.append(ConformanceCheckV1(name="checkpoint_reload", passed=reloaded))
+            deterministic = driver.conformance_deterministic_probe(fixture)
+            checks.append(ConformanceCheckV1(name="deterministic_probe", passed=deterministic))
         except Exception as exc:
             present = {item.name for item in checks}
             checks.extend(ConformanceCheckV1(
                 name=name, passed=False, reason=str(exc),
             ) for name in self.check_names if name not in present)
+        registered = all(item.passed for item in checks)
         return ModelConformanceReportV1(
             model_id=driver.model_id, driver_id=driver.driver_id,
-            checks=tuple(checks), registered=all(item.passed for item in checks),
+            checks=tuple(checks), registered=registered,
+            registration_state="conformant" if registered else "rejected",
         )

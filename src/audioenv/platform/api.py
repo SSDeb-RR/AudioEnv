@@ -840,10 +840,13 @@ def _register_foundry_artifacts(
     metadata: dict[str, Any],
 ) -> None:
     for artifact_id in artifact_ids:
-        stored = store.describe(artifact_id, media_type="application/json")
+        payload = store.get_bytes(artifact_id)
+        media_type = "application/zip" if payload.startswith(b"PK\x03\x04") else "application/json"
+        stored = store.describe(artifact_id, media_type=media_type)
         repository.add_artifact(
             stored.id, experiment_id=None, project_id=project_id,
-            kind="harness-scaffold", media_type=stored.media_type,
+            kind="model-driver-scaffold" if media_type == "application/zip" else "harness-scaffold",
+            media_type=stored.media_type,
             size_bytes=stored.size_bytes, path=str(stored.path), metadata=metadata,
         )
 

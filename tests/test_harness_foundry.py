@@ -1,4 +1,6 @@
 import json
+import io
+import zipfile
 import subprocess
 
 import pytest
@@ -137,6 +139,14 @@ def test_model_foundry_selects_family_driver_and_scaffolds_unknown(tmp_path):
     unknown = foundry.inspect("lab/new-audio", str(unknown_dir))
     assert unknown.status == "needs_review"
     assert unknown.generated_files
+    archive = zipfile.ZipFile(io.BytesIO(foundry.artifacts.get_bytes(unknown.generated_files[0])))
+    assert "manifest.json" in archive.namelist()
+    manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["registration_state"] == "generated_needs_review"
+    assert "lora_update" in manifest["required_conformance"]
+    driver_source = archive.read(next(name for name in archive.namelist() if name.endswith("/driver.py"))).decode()
+    assert "conformance_optimizer_step" in driver_source
+    assert "NotImplementedError" in driver_source
 
 
 def test_foundry_api_persists_build_and_drives_compatibility(tmp_path):
@@ -162,3 +172,24 @@ def test_foundry_api_persists_build_and_drives_compatibility(tmp_path):
     assert compatibility.status_code == 200, compatibility.text
     local = next(item for item in compatibility.json()["trainers"] if item["harness_id"] == "audioenv/small-audio-reinforce")
     assert local["compatible"]
+
+
+def test_unknown_model_api_registers_downloadable_review_gated_sdk(tmp_path):
+    source = tmp_path / "unknown-model"
+    source.mkdir()
+    (source / "config.json").write_text(json.dumps({"model_type": "novel_audio"}))
+    app = create_app(f"sqlite:///{tmp_path / 'models.sqlite'}")
+    client = TestClient(app)
+    project = client.post("/api/projects", json={"name": "Adapters"}).json()
+    response = client.post("/api/foundry/models", json={
+        "project_id": project["id"], "model_id": "lab/novel-audio", "source": str(source),
+    })
+    assert response.status_code == 201
+    artifact_id = response.json()["generated_artifact_ids"][0]
+    artifact = app.state.repository.get_artifact(artifact_id)
+    assert artifact.kind == "model-driver-scaffold"
+    assert artifact.media_type == "application/zip"
+    assert client.get(f"/api/artifacts/{artifact_id}/download").content.startswith(b"PK\x03\x04")
+    model = app.state.repository.get_model("lab/novel-audio")
+    assert model.available is False
+    assert model.adapter_type == "generated-needs-review"

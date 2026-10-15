@@ -56,6 +56,7 @@ class ModelOnboardingReport(FrozenModel):
     detected_family: str
     selected_driver: str | None
     status: HarnessStatus
+    registration_state: Literal["certified", "conformant", "generated_needs_review", "rejected"] = "generated_needs_review"
     capabilities: tuple[str, ...] = ()
     conformance_checks: tuple[dict[str, Any], ...] = ()
     compatible_trainers: tuple[str, ...] = ()

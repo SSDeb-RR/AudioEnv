@@ -48,9 +48,17 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   runs the candidate through deterministic validation, and keeps it in
   `generated_needs_review`. No Codex call occurs implicitly.
 - Model onboarding detects the Qwen3-Omni family, selects its shared driver,
-  or creates a reviewable driver-conformance scaffold for an unknown model.
+  or creates a deterministic, downloadable Python driver SDK for an unknown
+  model. The generated package contains a manifest, driver skeleton, and test,
+  but truthfully reports `generated_needs_review` and remains unavailable.
   Caller and trainer choices in the run wizard are resolved from declared
   capabilities instead of a hard-coded menu.
+- The executable Omni conformance contract now checks native-audio inference,
+  structured actions, token/log-probability alignment, multimodal position
+  channels, response masks, declared gradient scope, a real optimizer-state
+  and parameter-hash change, checkpoint round-trip, and deterministic probing.
+  A conformant fixture passes every gate; Qwen remains unregistered until the
+  same suite runs in the pinned CUDA worker.
 - The Foundry can invoke Repo2RLEnv `v0.9.3` through a restricted Python 3.12
   `uv` worker for the `pr_diff` pipeline and import its Harbor task output.
   Docker-dependent pipelines are rejected rather than mounting the host socket.
@@ -117,7 +125,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-75 passed
+78 passed
 
 uv run audioenv validate
 389 passed, 0 failed

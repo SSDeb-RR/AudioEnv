@@ -46,11 +46,11 @@ reported as a preview, not AudioEnv V1 complete.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 75 tests passed, including isolated declarative validation, signed backend promotion evidence, API-to-worker product acceptance flows, pinned VeRL launch/reward contracts, and the isolated tau2 controller |
+| V0 and V1 Python suite | PASS | 78 tests passed, including executable Omni conformance, isolated declarative validation, signed promotion evidence, pinned VeRL launch/reward contracts, and the isolated tau2 controller |
 | Built-in environment validation | PASS | 389 checks passed across all 48 tasks; 0 failed, including per-episode state isolation |
 | Python package build | PASS | `audioenv_foundry-0.5.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
 | Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
-| Dynamic model harness | PASS, LIMITED | Qwen3-Omni family detection and unknown-driver scaffold generation pass; real model conformance remains GPU-gated |
+| Dynamic model harness | PASS, LIMITED | Unknown families receive a downloadable review-gated Python SDK; a fixture passes optimizer/reload/determinism conformance, while real Qwen conformance remains GPU-gated |
 | Dynamic trainer/caller selection | PASS | API and dashboard options are capability-resolved; blocked backends remain visible with reasons |
 | Dashboard dependency audit | PASS | `npm audit` reported zero vulnerabilities |
 | Dashboard production build | PASS | TypeScript and Vite build completed |
