@@ -12,8 +12,9 @@ environments.
 
 The runtime keeps the conversational channel as audio, keeps tool traffic
 structured, isolates episode state, and emits process plus terminal rewards.
-It does **not** implement an optimizer, telephony, full-duplex streaming, or
-closed-model RL.
+It includes one local REINFORCE optimizer and Qwen3-Omni GSPO/GRPO trainer
+plugins, but does **not** invent a new distributed optimizer, telephony,
+full-duplex streaming, or closed-model RL.
 
 ## What works now
 
@@ -52,6 +53,11 @@ closed-model RL.
   conformance scaffold, plus capability-derived caller and trainer choices.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
+- Pinned Repo2RLEnv-to-Harbor import in an isolated container, with protected
+  verifier storage and automatic promotion only after every integrity gate.
+- `TrajectoryV2`, a model-driven caller/agent rollout worker, and distinct
+  VeRL-Omni v0.2 GSPO and GRPO Thinker-LoRA plugins. These paths are code-ready
+  but remain GPU-unverified.
 
 The bundled WAV renderer generates deterministic audio fixtures for tests. It
 is not a speech synthesizer. A real deployment must inject a native-audio user
@@ -79,7 +85,8 @@ uv run audioenv app --data-dir .audioenv
 # In the dashboard, open Foundry and submit a local path or an HTTPS GitHub
 # repository. Repository code is inspected but never imported or executed.
 # Choose Codex authoring explicitly only when an authenticated Codex CLI is
-# available; deterministic inspection is the credential-free default.
+# available. Repo2RLEnv mode additionally requires Docker and its pinned image;
+# deterministic inspection is the credential-free default.
 
 # This does not download weights; it reports why Qwen is or is not available.
 uv run --extra qwen audioenv qwen-probe
@@ -159,15 +166,17 @@ The legacy `NativeAudioModelAdapter` remains compatible with V0 callback-based
 integrations. V1 adds `GenerationRecord` and `TrajectoryV1`: action tokens,
 response masks, multimodal positions, old-policy log-probabilities, audio
 artifacts, policy versions, and episode boundaries are validated together.
+`TrajectoryV2` adds explicit multimodal feature spans, audio lineage, separate
+terminal/process reward provenance, and grouped-rollout validation.
 
 `Qwen3OmniAgentAdapter` and `Qwen3OmniCallerAdapter` use the upstream
 Transformers processor/model interfaces, preserve semantic-token/Talker-audio
 binding, and parse constrained structured tool envelopes. Their `probe()` does
 not download weights and reports missing CUDA, checkpoint, dependency, and
 capacity requirements explicitly. The CPU `SmallAudioToolPolicyTrainer` is a
-real audio-conditioned platform proof; `VerlOmniGSPOTrainer` is a strict pinned launch
-boundary for the external CUDA trainer and is not represented as having run on
-this host.
+real audio-conditioned platform proof. `VerlOmniGSPOTrainer` and
+`VerlOmniGRPOTrainer` are distinct strict launch plugins for pinned VeRL-Omni
+v0.2 and are not represented as having run on this host.
 
 Install optional integrations only when needed:
 
@@ -184,11 +193,11 @@ task rows and an in-process runtime; it never exposes verifier truth.
 ## Repository map
 
 ```text
-src/audioenv/contracts.py     versioned V1 IR, trajectory, and capabilities
+src/audioenv/contracts.py     versioned environment, trajectory V1/V2, and GPU contracts
 src/audioenv/runtime.py       isolated episode execution and action binding
 src/audioenv/rewards.py       process and terminal verification
 src/audioenv/validation.py    pre-training integrity checks
-src/audioenv/rollout_v1.py    validated V1 rollout collection
+src/audioenv/rollout_v2.py    model-driven caller/agent trajectory collection
 src/audioenv/adapters/        benchmark conversion SDK and tau2 importer
 src/audioenv/integrations/    optional ecosystem compatibility bridges
 src/audioenv/models/          scripted and Qwen3-Omni adapter implementations
@@ -202,7 +211,7 @@ web/                          React/TypeScript operator dashboard
 The following require external resources and are deliberately not represented
 as completed:
 
-- a Qwen3-Omni-30B-A3B baseline and Thinker LoRA/GSPO training run;
+- Qwen3-Omni-30B-A3B baseline and Thinker LoRA GSPO and GRPO training runs;
 - a ten-point held-out pass@1 improvement;
 - transfer to an independent native-audio caller;
 - GPU throughput and cost measurements;

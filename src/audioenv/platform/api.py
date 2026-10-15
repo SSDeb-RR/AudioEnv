@@ -24,6 +24,7 @@ from .db import Database, InvalidTransition, PlatformRepository, serialize_exper
 from ..artifacts import LocalArtifactStore
 from ..authoring import CustomTaskInput, DeterministicEnvironmentAuthor
 from ..evaluation import package_hashes
+from ..contracts import GPUExecutionPlanV1, PromotionReportV1
 from ..foundry import EnvironmentFoundry, ModelFoundry
 from ..harnesses import build_builtin_registry, resolve_compatibility
 from ..reference import build_reference_package, build_reference_split_manifest
@@ -77,10 +78,23 @@ class ModelProbeRequest(StrictRequest):
     model_id: str
 
 
+class GPUPreflightRequest(StrictRequest):
+    plan: GPUExecutionPlanV1
+    model_path: str
+
+
 class EnvironmentFoundryRequest(StrictRequest):
     project_id: str | None = None
     source_uri: str = Field(min_length=1, max_length=4_096)
-    authoring_provider: Literal["deterministic", "codex"] = "deterministic"
+    authoring_provider: Literal["deterministic", "codex", "repo2rlenv"] = "deterministic"
+    repo_pipeline: Literal["pr_runtime", "commit_runtime", "pr_diff"] = "pr_runtime"
+    repo_limit: int = Field(default=5, ge=1, le=100)
+    repo_llm: str | None = Field(default=None, max_length=200)
+
+
+class EnvironmentPromotionRequest(StrictRequest):
+    verifier_hash_after: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checks: dict[str, bool]
 
 
 class ModelFoundryRequest(StrictRequest):
@@ -102,7 +116,7 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
     database.create_schema()
     repository = PlatformRepository(database)
     repository.ensure_default_project()
-    app = FastAPI(title="AudioEnv", version="0.4.0")
+    app = FastAPI(title="AudioEnv", version="0.5.0")
     app.state.database = database
     app.state.repository = repository
     app.state.processes = {}
@@ -127,7 +141,7 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.4.0"}
+        return {"status": "ok", "version": "0.5.0"}
 
     @app.get("/api/overview")
     def overview() -> dict[str, Any]:
@@ -193,15 +207,17 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
         try:
             result = app.state.environment_foundry.build(
                 request.source_uri, authoring_provider=request.authoring_provider,
+                repo_pipeline=request.repo_pipeline, repo_limit=request.repo_limit,
+                repo_llm=request.repo_llm,
             )
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
             raise HTTPException(422, str(exc)) from exc
         environment_id = None
-        if result.authored is not None:
-            boundary = result.authored.boundary
+        boundary = result.authored.boundary if result.authored is not None else result.boundary
+        if boundary is not None:
             validation = {
-                "passed": result.authored.validation.passed,
-                "checks": [asdict(item) for item in result.authored.validation.checks],
+                "passed": result.authored.validation.passed if result.authored else False,
+                "checks": [asdict(item) for item in result.authored.validation.checks] if result.authored else [],
             }
             row = repository.register_environment(
                 record_id=f"{boundary.id}@{boundary.version}", version=boundary.version,
@@ -224,6 +240,22 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
             generated_artifact_ids=result.report.generated_files, environment_id=environment_id,
         )
         return _harness_build(build)
+
+    @app.post("/api/environments/{environment_id}/promote")
+    def promote_environment(environment_id: str, request: EnvironmentPromotionRequest) -> dict[str, Any]:
+        row = repository.get_environment(environment_id)
+        if row is None:
+            raise HTTPException(404, "environment not found")
+        package = json.loads(row.package_json)
+        verifier_before = str(package["protected_verifier"]["sha256"])
+        report = PromotionReportV1.evaluate(
+            environment_hash=row.content_hash, verifier_hash_before=verifier_before,
+            verifier_hash_after=request.verifier_hash_after, checks=request.checks,
+        )
+        if not report.promoted:
+            raise HTTPException(422, {"message": "promotion gates failed", "report": report.model_dump(mode="json")})
+        promoted = repository.promote_environment(environment_id, report.model_dump(mode="json"))
+        return _environment(promoted, details=True)
 
     @app.post("/api/foundry/models", status_code=201)
     def build_model_harness(request: ModelFoundryRequest) -> dict[str, Any]:
@@ -313,6 +345,46 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
             raise HTTPException(422, f"unsupported model adapter: {row.adapter_type}")
         updated = repository.set_model_probe(request.model_id, probe.model_dump(mode="json"))
         return _model(updated)
+
+    @app.post("/api/models/{model_id:path}/conformance")
+    def model_conformance(model_id: str) -> dict[str, Any]:
+        row = repository.get_model(model_id)
+        if row is None:
+            raise HTTPException(404, "model not found")
+        if row.adapter_type != "qwen3-omni":
+            raise HTTPException(422, "full conformance is currently implemented for qwen3-omni")
+        from ..audio import DeterministicWavFixtureRenderer
+        from ..models import (
+            ConformanceFixture, ModelConformanceRunner, Qwen3OmniAgentAdapter, Qwen3OmniDriver,
+        )
+        from ..spec import AudioObservation, AudioProfile
+        config = json.loads(row.config_json)
+        adapter = Qwen3OmniAgentAdapter(
+            config.get("checkpoint", row.id), revision=config.get("revision"), allow_download=False,
+        )
+        audio = DeterministicWavFixtureRenderer().render("Please check my order.", AudioProfile(), 7)
+        report = ModelConformanceRunner().run(
+            Qwen3OmniDriver(adapter), ConformanceFixture(AudioObservation(audio=audio)),
+        )
+        probe = adapter.probe().model_dump(mode="json")
+        probe["available"] = report.registered
+        probe["conformance"] = report.model_dump(mode="json")
+        repository.set_model_probe(model_id, probe)
+        return report.model_dump(mode="json")
+
+    @app.post("/api/gpu/preflight")
+    def gpu_preflight(request: GPUPreflightRequest) -> dict[str, Any]:
+        if request.plan.provider != "local-cuda":
+            return {
+                "available": False,
+                "reasons": ["RunPod requires a live quote and typed launch confirmation"],
+                "telemetry": {"provider": request.plan.provider},
+            }
+        from .gpu import LocalCUDAExecutionProvider
+        result = LocalCUDAExecutionProvider().preflight(
+            request.plan, model_path=Path(request.model_path),
+        )
+        return {"available": result.available, "reasons": result.reasons, "telemetry": result.telemetry}
 
     @app.get("/api/environments")
     def environments() -> list[dict[str, Any]]:

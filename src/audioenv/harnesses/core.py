@@ -166,11 +166,18 @@ def build_builtin_registry() -> HarnessRegistry:
             implementation="audioenv.training.tiny:SmallAudioToolPolicyTrainer",
         ),
         HarnessDescriptor(
-            id="verl-omni/qwen3-gspo", kind="trainer", display_name="VeRL-Omni Qwen3 GSPO",
+            id="qwen3-omni-thinker-gspo-lora", kind="trainer", display_name="Qwen3-Omni Thinker GSPO LoRA",
             status="blocked", status_reason="GPU acceptance has not run",
             capabilities=("gspo", "audio-input", "structured-tools", "peft-lora", "distributed"),
             requires=("audio-input", "structured-tools", "token-logprobs", "trainable", "peft-lora", "distributed"),
             implementation="audioenv.training.verl_omni:VerlOmniGSPOTrainer",
+        ),
+        HarnessDescriptor(
+            id="qwen3-omni-thinker-grpo-lora", kind="trainer", display_name="Qwen3-Omni Thinker GRPO LoRA",
+            status="blocked", status_reason="GPU acceptance has not run",
+            capabilities=("grpo", "audio-input", "structured-tools", "peft-lora", "distributed"),
+            requires=("audio-input", "structured-tools", "token-logprobs", "trainable", "peft-lora", "distributed"),
+            implementation="audioenv.training.verl_omni:VerlOmniGRPOTrainer",
         ),
         HarnessDescriptor(
             id="local-subprocess", kind="provider", display_name="Local subprocess",

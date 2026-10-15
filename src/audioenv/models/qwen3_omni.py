@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from ..contracts import GenerationRecord, ModelCapabilities, ProbeResult
 from ..spec import AudioObservation, SpeakAction, ToolCallAction
+from .caller import CallerTurn
 
 
 class Qwen3OmniAgentAdapter:
@@ -207,6 +208,20 @@ class Qwen3OmniCallerAdapter(Qwen3OmniAgentAdapter):
         return super().capabilities.model_copy(
             update={"structured_tools": False, "trainable": False, "trainable_modules": ()}
         )
+
+    def reset(self, seed: int) -> CallerTurn:
+        del seed  # sampling seed is configured by the isolated model worker
+        self.reset_conversation()
+        return self._caller_turn(AudioObservation(), 0)
+
+    def respond(self, agent_audio: bytes) -> CallerTurn | None:
+        return self._caller_turn(AudioObservation(audio=agent_audio), len(self._history))
+
+    def _caller_turn(self, observation: AudioObservation, index: int) -> CallerTurn:
+        action, _ = self.generate_step(observation)
+        if not isinstance(action, SpeakAction) or not action.audio:
+            raise RuntimeError("model-driven caller must generate non-empty speech audio")
+        return CallerTurn(action.audio, "qwen3_omni_frozen_caller", index)
 
 
 def _parse_tool_call(text: str) -> dict[str, Any] | None:

@@ -13,7 +13,7 @@ from .adapter import EnvironmentPackage, ToolResult
 from .contracts import GenerationRecord
 from .audio import AudioRenderer, DeterministicWavFixtureRenderer
 from .rewards import RewardTracker, total_reward
-from .spec import Action, AudioObservation, AudioProfile, JSONValue, SpeakAction, ToolCallAction
+from .spec import Action, AudioObservation, AudioProfile, InvalidAction, JSONValue, SpeakAction, ToolCallAction
 from .trace import EpisodeTrace, RewardEvent, TraceStep, state_hash
 
 
@@ -22,9 +22,13 @@ class EpisodeNotStarted(RuntimeError):
 
 
 class AudioEnvironment:
-    def __init__(self, package: EnvironmentPackage, renderer: AudioRenderer | None = None):
+    def __init__(
+        self, package: EnvironmentPackage, renderer: AudioRenderer | None = None,
+        *, external_caller: bool = False,
+    ):
         self.package = package
         self.renderer = renderer or DeterministicWavFixtureRenderer()
+        self.external_caller = external_caller
         self._state: dict[str, JSONValue] | None = None
         self._task = None
         self._profile: AudioProfile | None = None
@@ -42,6 +46,7 @@ class AudioEnvironment:
         *,
         audio_profile_id: str | None = None,
         model_id: str = "unknown",
+        initial_audio: bytes | None = None,
     ) -> AudioObservation:
         task = self.package.task(task_id)
         profile = self._select_profile(audio_profile_id)
@@ -62,7 +67,7 @@ class AudioEnvironment:
             model_id=model_id,
             audio_profile_id=profile.id,
         )
-        audio = self.renderer.render(task.initial_utterance, profile, seed)
+        audio = initial_audio if initial_audio is not None else self.renderer.render(task.initial_utterance, profile, seed)
         return AudioObservation(audio=audio, metrics={"step_count": 0, "audio_profile_id": profile.id})
 
     def step(self, action: Action, *, training: dict[str, JSONValue] | None = None) -> AudioObservation:
@@ -96,13 +101,20 @@ class AudioEnvironment:
                 "end_episode": action.end_episode,
             }
             events = ()
-            if self._caller_index < len(self._task.caller_turns) and not action.end_episode:
+            if self.external_caller and not action.end_episode:
+                audio = None
+            elif self._caller_index < len(self._task.caller_turns) and not action.end_episode:
                 private_turn = self._task.caller_turns[self._caller_index]
                 self._caller_index += 1
                 assert self._profile is not None
                 audio = self.renderer.render(private_turn, self._profile, self._seed + self._caller_index)
             elif action.end_episode or self._caller_index >= len(self._task.caller_turns):
                 self._done = True
+        elif isinstance(action, InvalidAction):
+            public_action = {
+                "kind": "invalid", "raw_sha256": action.raw_sha256, "reason": action.reason,
+            }
+            events = (RewardEvent("invalid_model_action", -0.2, "process", {"reason": action.reason}),)
         else:
             raise TypeError(f"unsupported action: {type(action)!r}")
 
@@ -156,6 +168,11 @@ class AudioEnvironment:
             expected = {"tool_call": {"name": action.name, "arguments": action.arguments}}
             if generation.tool_call != expected:
                 raise ValueError("tool action is not bound to the generation record")
+        elif isinstance(action, InvalidAction):
+            if generation.tool_call is not None:
+                raise ValueError("invalid action cannot carry a tool call")
+            if sha256(generation.semantic_text.encode()).hexdigest() != action.raw_sha256:
+                raise ValueError("invalid action is not bound to generated output")
         else:  # pragma: no cover - guarded by the public Action union
             raise TypeError(f"unsupported action: {type(action)!r}")
         return self.step(

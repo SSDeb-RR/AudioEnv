@@ -48,7 +48,7 @@ reported as a preview, not AudioEnv V1 complete.
 | --- | --- | --- |
 | V0 and V1 Python suite | PASS | 53 tests passed, including harness foundry, Codex authoring-boundary, and API-to-worker product acceptance flows |
 | Built-in environment validation | PASS | 341 checks passed across all 48 tasks; 0 failed |
-| Python package build | PASS | `audioenv_foundry-0.4.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
+| Python package build | PASS | `audioenv_foundry-0.5.0` wheel and sdist built; wheel inventory includes SPA, migrations, model adapters, and harness foundry |
 | Dynamic environment harness | PASS, LIMITED | Declarative repository tasks compile and validate; arbitrary coding repositories produce a non-executable OCI scaffold pending sandbox review |
 | Dynamic model harness | PASS, LIMITED | Qwen3-Omni family detection and unknown-driver scaffold generation pass; real model conformance remains GPU-gated |
 | Dynamic trainer/caller selection | PASS | API and dashboard options are capability-resolved; blocked backends remain visible with reasons |
@@ -63,7 +63,7 @@ reported as a preview, not AudioEnv V1 complete.
 | Official EnvHarness type integration | PASS | Exact bridge test passed against pinned upstream commit |
 | Qwen3-Omni dependency probe | PASS | Dependencies import; probe correctly blocks on missing CUDA and local checkpoint without downloading |
 | Real Qwen native-audio episode | BLOCKED | No CUDA device or checkpoint on the audit host |
-| VeRL-Omni GSPO update | BLOCKED | Requires separately approved multi-GPU worker |
+| VeRL-Omni GSPO and GRPO update | BLOCKED | Code-ready launch plugins exist; each requires a separately approved multi-GPU worker |
 | Independent caller transfer | NOT RUN | Depends on the real native-audio training run |
 | Ten-point native-model learning lift | NOT RUN | Local proof exceeds the threshold but is explicitly ineligible as native Qwen evidence |
 | OCI coding sandbox | BLOCKED | No Docker-compatible runtime is installed |

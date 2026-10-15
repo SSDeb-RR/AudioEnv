@@ -54,7 +54,14 @@ class SpeakAction:
     kind: Literal["speak"] = "speak"
 
 
-Action: TypeAlias = ToolCallAction | SpeakAction
+@dataclass(frozen=True, slots=True)
+class InvalidAction:
+    raw_sha256: str
+    reason: str
+    kind: Literal["invalid"] = "invalid"
+
+
+Action: TypeAlias = ToolCallAction | SpeakAction | InvalidAction
 
 
 @dataclass(frozen=True, slots=True)

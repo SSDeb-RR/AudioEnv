@@ -49,6 +49,13 @@ families receive a content-addressed driver scaffold and remain
 `needs_review`. Model identifiers never imply that weights were downloaded or
 loaded.
 
+Repo2RLEnv generation is an explicit Foundry mode pinned to commit
+`e5e6a93a6d7947a012a361b68457a982cc85fc9e`. It runs behind the restricted
+`SandboxExecutor`, produces Harbor tasks, and is imported without putting
+private test scripts into public task records. Promotion is computed only when
+sandbox, oracle, negative, determinism, isolation, leakage, reward-integrity,
+and verifier-immutability gates all pass.
+
 ## Trust boundaries
 
 - Model workers receive public task material, native caller audio, permitted
@@ -90,16 +97,28 @@ restricted `Rules`. The protected AudioEnv verifier remains authoritative.
 EnvHarness is an optional, pinned integration rather than a core dependency.
 `Link` and arbitrary generated Python rules are deferred.
 
-## Training boundary
+## Native-audio rollout and training boundary
 
-The trainer consumes validated `TrajectoryV1` records, not environment objects.
+`OmniModelDriver` is the architecture-family boundary. Qwen3-Omni is the
+certified reference implementation; generated drivers cannot register before
+native-audio, structured-action, alignment, gradient, update, and reload
+conformance passes. Caller and agent histories are isolated.
+
+The model-driven runner emits `TrajectoryV2`, binding audio hashes,
+multimodal spans, prompt/generated tokens, response masks, rollout
+log-probabilities, policy versions, actions, rewards, and episode boundaries.
+Only agent Thinker action tokens receive response mask `1`.
+
+The trainer consumes validated trajectories, not environment objects.
 Trainers declare their algorithms, model families, trainable modules,
 distributed backends, checkpoint format, and resume support. Unsupported
 configurations fail before queueing.
 
-The local trainer is a real Torch policy-gradient smoke test. The production
-adapter delegates Thinker LoRA/GSPO to pinned VeRL-Omni. Environment and reward
-code contain no optimizer-specific behavior.
+The local trainer is a real Torch policy-gradient smoke test. Separate GSPO and
+GRPO plugins delegate Qwen3 Thinker LoRA to VeRL-Omni v0.2 pinned at
+`49dedb6ec0691588494b629fc1b610a86612966b`; both use grouped GRPO outcome
+advantages. Talker, codec, audio tower, caller, and reference policy remain
+frozen. Environment and reward code contain no optimizer-specific behavior.
 
 ## Persistence and lifecycle
 

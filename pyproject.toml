@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "audioenv-foundry"
-version = "0.4.0"
+version = "0.5.0"
 description = "Audio-native, deterministic RL environments for speech-to-speech agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,7 @@ qwen = [
   "torchvision>=0.19",
   "transformers>=5.0",
   "qwen-omni-utils>=0.0.8",
+  "peft>=0.17",
 ]
 openenv = ["openenv-core"]
 verifiers = ["verifiers"]

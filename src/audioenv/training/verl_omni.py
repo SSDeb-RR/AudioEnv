@@ -1,22 +1,19 @@
-"""Validated launch boundary for VeRL-Omni Qwen3-Omni Thinker GSPO.
-
-This module refuses to claim availability until the pinned checkout, CUDA
-topology, model path, and launch recipe are present. It does not reimplement
-VeRL-Omni's optimizer.
-"""
+"""VeRL-Omni v0.2 Qwen3-Omni Thinker GSPO and GRPO launch plugins."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+from typing import Literal
 
-from ..contracts import ResourceEstimate, TrainerCapabilities
+from ..contracts import OnlineRLTrainerConfigV1, ResourceEstimate, TrainerCapabilities
 
 
-PINNED_VERL_OMNI_COMMIT = "eebe8a983b742960b0887026191517fe66505260"
+PINNED_VERL_OMNI_COMMIT = "49dedb6ec0691588494b629fc1b610a86612966b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,39 +22,53 @@ class VerlOmniConfig:
     model_path: Path
     dataset_path: Path
     output_dir: Path
+    environment_manifest: Path | None = None
+    caller_model_path: Path | None = None
+    algorithm: Literal["gspo", "grpo"] = "gspo"
     nodes: int = 1
     gpus_per_node: int = 4
     learning_rate: float = 1e-6
     lora_rank: int = 32
     lora_alpha: int = 64
+    group_size: int = 4
     max_steps: int = 1
+    resume_from: Path | None = None
+
+    def online(self) -> OnlineRLTrainerConfigV1:
+        return OnlineRLTrainerConfigV1(
+            algorithm=self.algorithm, model_id=str(self.model_path), group_size=self.group_size,
+            learning_rate=self.learning_rate, lora_rank=self.lora_rank,
+            lora_alpha=self.lora_alpha, max_steps=self.max_steps,
+            resume_from=str(self.resume_from) if self.resume_from else None,
+        )
 
 
-class VerlOmniGSPOTrainer:
-    trainer_id = "verl-omni/qwen3-thinker-gspo-lora"
+class _VerlOmniTrainer:
+    algorithm: Literal["gspo", "grpo"]
 
     @property
     def capabilities(self) -> TrainerCapabilities:
         return TrainerCapabilities(
-            algorithms=("gspo",),
-            model_families=("qwen3-omni-thinker",),
-            action_modalities=("audio-input-text-action",),
+            algorithms=(self.algorithm,), model_families=("qwen3-omni-thinker",),
+            action_modalities=("native-audio-input", "structured-tools", "text-action-tokens"),
             trainable_modules=("q_proj", "k_proj", "v_proj", "o_proj"),
-            distributed_backends=("fsdp", "vllm-omni"),
-            supports_resume=True,
+            distributed_backends=("fsdp", "vllm-omni"), supports_resume=True,
             checkpoint_format="peft-lora",
         )
 
     def validate_config(self, config: VerlOmniConfig) -> tuple[str, ...]:
         errors: list[str] = []
+        try:
+            online = config.online()
+        except Exception as exc:
+            errors.append(str(exc))
+            online = None
+        if config.algorithm != self.algorithm:
+            errors.append(f"{self.trainer_id} requires algorithm={self.algorithm}")
         if config.gpus_per_node < 4:
-            errors.append("the pinned validated recipe requires at least 4 GPUs")
+            errors.append("Qwen3-Omni Thinker LoRA requires at least 4 80GB GPUs")
         if config.nodes != 1:
-            errors.append("V1 supports the pinned single-node recipe only")
-        if config.lora_rank < 1 or config.lora_alpha < 1:
-            errors.append("LoRA rank and alpha must be positive")
-        if config.max_steps < 1:
-            errors.append("max_steps must be positive")
+            errors.append("the release-certified path is single-node")
         if not config.checkout.is_dir():
             errors.append("VeRL-Omni checkout does not exist")
         elif _git_revision(config.checkout) != PINNED_VERL_OMNI_COMMIT:
@@ -65,7 +76,15 @@ class VerlOmniGSPOTrainer:
         if not config.model_path.exists():
             errors.append("Qwen3-Omni model path does not exist")
         if not config.dataset_path.is_file():
-            errors.append("trainer dataset does not exist")
+            errors.append("rollout seed dataset does not exist")
+        if config.environment_manifest is not None and not config.environment_manifest.is_file():
+            errors.append("AudioEnv environment manifest does not exist")
+        if config.caller_model_path is not None and not config.caller_model_path.exists():
+            errors.append("frozen caller model path does not exist")
+        if config.resume_from is not None and not config.resume_from.exists():
+            errors.append("resume checkpoint does not exist")
+        if online and tuple(online.lora_targets) != ("q_proj", "k_proj", "v_proj", "o_proj"):
+            errors.append("only the release-certified Thinker LoRA targets are supported")
         return tuple(errors)
 
     def preflight(self, config: VerlOmniConfig) -> ResourceEstimate:
@@ -73,51 +92,77 @@ class VerlOmniGSPOTrainer:
         if shutil.which("nvidia-smi") is None:
             errors.append("nvidia-smi is unavailable")
         else:
-            probe = subprocess.run(
+            process = subprocess.run(
                 ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-                capture_output=True,
-                text=True,
-                check=False,
+                capture_output=True, text=True, check=False,
             )
-            memories = [int(line.strip()) for line in probe.stdout.splitlines() if line.strip().isdigit()]
-            if len(memories) < config.gpus_per_node:
-                errors.append(f"requires {config.gpus_per_node} GPUs; found {len(memories)}")
-            if any(value < 79_000 for value in memories[: config.gpus_per_node]):
-                errors.append("each selected GPU must provide approximately 80 GB")
+            memory = [int(item.strip()) for item in process.stdout.splitlines() if item.strip().isdigit()]
+            if len(memory) < config.gpus_per_node:
+                errors.append(f"requires {config.gpus_per_node} GPUs; found {len(memory)}")
+            if any(item < 79_000 for item in memory[:config.gpus_per_node]):
+                errors.append("selected GPUs must provide approximately 80 GB each")
         return ResourceEstimate(
-            provider="local-cuda",
-            device_type="H800/H100-class CUDA GPU",
-            device_count=config.gpus_per_node,
-            memory_gb_per_device=80,
-            available=not errors,
-            reasons=tuple(errors),
+            provider="local-cuda", device_type="H800/H100/H200-class CUDA GPU",
+            device_count=config.gpus_per_node, memory_gb_per_device=80,
+            available=not errors, reasons=tuple(errors),
         )
 
-    def launch_command(self, config: VerlOmniConfig) -> tuple[str, ...]:
-        preflight = self.preflight(config)
-        if not preflight.available:
-            raise RuntimeError("VeRL-Omni preflight failed: " + "; ".join(preflight.reasons))
-        recipe = config.checkout / "examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_lora_avqa_v1.sh"
-        if not recipe.is_file():
-            raise RuntimeError("pinned VeRL-Omni recipe is missing")
-        return ("bash", str(recipe))
+    def launch_command(self, config: VerlOmniConfig, *, require_preflight: bool = True) -> tuple[str, ...]:
+        errors = self.validate_config(config)
+        if require_preflight:
+            estimate = self.preflight(config)
+            if not estimate.available:
+                raise RuntimeError("VeRL-Omni preflight failed: " + "; ".join(estimate.reasons))
+        elif errors:
+            raise RuntimeError("invalid VeRL-Omni configuration: " + "; ".join(errors))
+        loss_mode = "gspo" if self.algorithm == "gspo" else "vanilla"
+        command = [
+            "python", "-m", "verl_omni.trainer.main_omni",
+            "--config-path=examples/omni_trainer/qwen3_omni/config",
+            "--config-name=qwen3_omni_thinker",
+            f"actor_rollout_ref.model.path={config.model_path.resolve()}",
+            "actor_rollout_ref.model.architecture=Qwen3OmniMoeForConditionalGeneration",
+            "actor_rollout_ref.model.model_stage=thinker",
+            "actor_rollout_ref.rollout.pipeline_mode=thinker_only",
+            f"actor_rollout_ref.actor.policy_loss.loss_mode={loss_mode}",
+            "algorithm.trainer_type=policy_gradient", "algorithm.sample_source=online",
+            "algorithm.adv_estimator=grpo", f"actor_rollout_ref.rollout.n={config.group_size}",
+            f"actor_rollout_ref.actor.optim.lr={config.learning_rate}",
+            f"actor_rollout_ref.model.lora_rank={config.lora_rank}",
+            f"actor_rollout_ref.model.lora_alpha={config.lora_alpha}",
+            "actor_rollout_ref.model.target_modules=['q_proj','k_proj','v_proj','o_proj']",
+            f"data.train_files={config.dataset_path.resolve()}",
+            f"trainer.n_gpus_per_node={config.gpus_per_node}", f"trainer.nnodes={config.nodes}",
+            f"trainer.total_training_steps={config.max_steps}",
+            f"trainer.default_local_dir={config.output_dir.resolve()}",
+        ]
+        if config.resume_from:
+            command.extend(("trainer.resume_mode=resume_path", f"trainer.resume_from_path={config.resume_from.resolve()}"))
+        return tuple(command)
 
     def launch_environment(self, config: VerlOmniConfig) -> dict[str, str]:
-        env = {
-            "MODEL_PATH": str(config.model_path.resolve()),
-            "DATA_PATH": str(config.dataset_path.resolve()),
-            "OUTPUT_DIR": str(config.output_dir.resolve()),
-            "AUDIOENV_MAX_STEPS": str(config.max_steps),
-            "AUDIOENV_LEARNING_RATE": str(config.learning_rate),
-            "AUDIOENV_LORA_RANK": str(config.lora_rank),
-            "AUDIOENV_LORA_ALPHA": str(config.lora_alpha),
+        plugin = {
+            "schema_version": "audioenv.verl-plugin/v1", "algorithm": self.algorithm,
+            "environment_manifest": str(config.environment_manifest.resolve()) if config.environment_manifest else None,
+            "caller_model_path": str(config.caller_model_path.resolve()) if config.caller_model_path else None,
         }
-        return {**os.environ, **env}
+        return {
+            **os.environ, "AUDIOENV_VERL_PLUGIN": json.dumps(plugin, sort_keys=True),
+            "AUDIOENV_REWARD_MANAGER": "audioenv.training.verl_plugin:AudioEnvRewardManager",
+            "AUDIOENV_AGENT_LOOP": "audioenv.training.verl_plugin:AudioEnvVerlAgentLoop",
+        }
+
+
+class VerlOmniGSPOTrainer(_VerlOmniTrainer):
+    trainer_id = "qwen3-omni-thinker-gspo-lora"
+    algorithm = "gspo"
+
+
+class VerlOmniGRPOTrainer(_VerlOmniTrainer):
+    trainer_id = "qwen3-omni-thinker-grpo-lora"
+    algorithm = "grpo"
 
 
 def _git_revision(path: Path) -> str | None:
-    process = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=False
-    )
+    process = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=False)
     return process.stdout.strip() if process.returncode == 0 else None
-

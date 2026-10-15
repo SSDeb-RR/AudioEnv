@@ -45,6 +45,18 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   or creates a reviewable driver-conformance scaffold for an unknown model.
   Caller and trainer choices in the run wizard are resolved from declared
   capabilities instead of a hard-coded menu.
+- The Foundry can invoke pinned Repo2RLEnv `v0.9.3` in a restricted Docker
+  boundary and import its Harbor task output. Harbor instructions remain public
+  while verifier paths and hashes are stored in a protected artifact.
+- Generated environments use an explicit promotion report. Sandbox build,
+  oracle, no-op, adversarial, determinism, state-isolation, leakage,
+  reward-integrity, and verifier-immutability gates must all pass.
+- `TrajectoryV2` validates multimodal feature references, prompt/response
+  positions, response-only masks, rollout log-probabilities, policy version,
+  audio lineage, episode termination, and reward provenance.
+- Distinct Qwen3-Omni Thinker trainer plugins now emit GSPO and GRPO loss
+  configurations against pinned VeRL-Omni v0.2. Both use grouped GRPO outcome
+  advantages and reject groups smaller than two.
 
 ## Partial
 
@@ -53,14 +65,15 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   and environment-state verification, but Python 3.12 is unavailable on this
   host. Full upstream communication-reward parity is not claimed.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
-  alignment, isolated rollouts, and VeRL-shaped batch export. It has not run
-  inside the pinned CUDA VeRL worker.
-- RunPod has a guarded provider contract and truthful UI state. Live REST v2,
-  SSH streaming, SFTP collection, and reconnect behavior are not verified.
+  alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
+  export. It has not run inside the pinned CUDA VeRL worker.
+- RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
+  runtime/budget stops, reconnect, and SFTP command construction. Live API,
+  SSH event streaming, and artifact collection are not verified.
 
 ## Blocked
 
-- Qwen3-Omni-30B-A3B native caller/agent execution and VeRL-Omni GSPO LoRA
+- Qwen3-Omni-30B-A3B native caller/agent execution and VeRL-Omni GSPO/GRPO LoRA
   require approved Linux CUDA infrastructure, model weights, credentials, a
   live quote, maximum budget/runtime, and typed launch confirmation.
 - The UI reports `Integration ready; GPU acceptance not run`.
@@ -78,7 +91,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-53 passed
+60 passed
 
 uv run audioenv validate
 341 passed, 0 failed
@@ -88,7 +101,7 @@ Vite production build passed
 2 Playwright product-flow tests passed
 
 uv build
-audioenv_foundry-0.4.0 wheel and sdist built
+audioenv_foundry-0.5.0 wheel and sdist built
 ```
 
 The product-flow gates cover project creation, resource selection, preflight,

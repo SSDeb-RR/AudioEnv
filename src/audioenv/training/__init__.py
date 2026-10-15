@@ -2,7 +2,7 @@
 
 from .base import TrainerPlugin
 from .tiny import TinyAudioPolicyTrainer, TinyTrainerConfig, TinyTrainingResult
-from .verl_omni import VerlOmniConfig, VerlOmniGSPOTrainer
+from .verl_omni import VerlOmniConfig, VerlOmniGRPOTrainer, VerlOmniGSPOTrainer
 from .audioenv_agent_loop import AudioEnvAgentLoop, VerlOmniBatch
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     "TinyTrainingResult",
     "VerlOmniConfig",
     "VerlOmniGSPOTrainer",
+    "VerlOmniGRPOTrainer",
     "AudioEnvAgentLoop",
     "VerlOmniBatch",
 ]

@@ -361,3 +361,217 @@ class ExecutionProviderDescriptor(FrozenModel):
     status: Literal["available", "blocked", "unavailable"]
     status_reason: str | None = None
 
+
+class SandboxPolicyV1(FrozenModel):
+    network: Literal["off", "bootstrap-only"] = "off"
+    run_as_non_root: bool = True
+    read_only_base: bool = True
+    ephemeral_workspace: bool = True
+    host_socket: bool = False
+    inherit_secrets: bool = False
+    cpu_limit: float = Field(default=2.0, gt=0)
+    memory_mb: int = Field(default=4096, gt=0)
+    pid_limit: int = Field(default=256, gt=0)
+    timeout_seconds: int = Field(default=600, gt=0)
+
+
+class FoundryJobV1(FrozenModel):
+    schema_version: Literal["audioenv.foundry-job/v1"] = "audioenv.foundry-job/v1"
+    id: str
+    source_uri: str
+    generator: Literal["deterministic", "codex", "repo2rlenv", "tau2"]
+    status: Literal["draft", "analyzing", "generating", "validating", "completed", "failed"]
+    sandbox_policy: SandboxPolicyV1
+    logs: tuple[str, ...] = ()
+    generated_artifact_ids: tuple[str, ...] = ()
+    validation_report: dict[str, Any] | None = None
+    promotion: Literal["validated", "generated_needs_review", "unsupported"] | None = None
+    failure_reason: str | None = None
+
+
+class PromotionReportV1(FrozenModel):
+    schema_version: Literal["audioenv.promotion/v1"] = "audioenv.promotion/v1"
+    environment_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash_before: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash_after: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checks: dict[str, bool]
+    promoted: bool
+    missing_or_failed: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def enforce_hard_gates(self) -> "PromotionReportV1":
+        required = {
+            "sandbox_build", "oracle_pass", "noop_fail", "adversarial_fail",
+            "determinism", "state_isolation", "leakage", "reward_integrity",
+        }
+        failed = sorted(name for name in required if not self.checks.get(name, False))
+        if self.verifier_hash_before != self.verifier_hash_after:
+            failed.append("verifier_immutability")
+        if self.promoted and failed:
+            raise ValueError("promotion requires every hard gate")
+        if self.promoted != (not failed):
+            raise ValueError("promoted must reflect the hard-gate result")
+        if tuple(failed) != self.missing_or_failed:
+            raise ValueError("missing_or_failed must list the failed hard gates")
+        return self
+
+    @classmethod
+    def evaluate(
+        cls, *, environment_hash: str, verifier_hash_before: str,
+        verifier_hash_after: str, checks: dict[str, bool],
+    ) -> "PromotionReportV1":
+        required = {
+            "sandbox_build", "oracle_pass", "noop_fail", "adversarial_fail",
+            "determinism", "state_isolation", "leakage", "reward_integrity",
+        }
+        failed = sorted(name for name in required if not checks.get(name, False))
+        if verifier_hash_before != verifier_hash_after:
+            failed.append("verifier_immutability")
+        return cls(
+            environment_hash=environment_hash,
+            verifier_hash_before=verifier_hash_before,
+            verifier_hash_after=verifier_hash_after,
+            checks=checks, promoted=not failed, missing_or_failed=tuple(failed),
+        )
+
+
+class ConformanceCheckV1(FrozenModel):
+    name: str
+    passed: bool
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None = None
+
+
+class ModelConformanceReportV1(FrozenModel):
+    schema_version: Literal["audioenv.model-conformance/v1"] = "audioenv.model-conformance/v1"
+    model_id: str
+    driver_id: str
+    checks: tuple[ConformanceCheckV1, ...]
+    registered: bool
+    generated_artifact_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def registration_requires_all_checks(self) -> "ModelConformanceReportV1":
+        if self.registered and (not self.checks or not all(item.passed for item in self.checks)):
+            raise ValueError("a model driver can register only after every conformance check passes")
+        return self
+
+
+class OnlineRLTrainerConfigV1(FrozenModel):
+    schema_version: Literal["audioenv.online-rl/v1"] = "audioenv.online-rl/v1"
+    algorithm: Literal["gspo", "grpo"]
+    model_id: str = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+    group_size: int = Field(default=4, ge=2)
+    learning_rate: float = Field(default=1e-6, gt=0)
+    max_steps: int = Field(default=1, ge=1)
+    lora_rank: int = Field(default=32, ge=1)
+    lora_alpha: int = Field(default=64, ge=1)
+    lora_targets: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
+    temperature: float = Field(default=1.0, gt=0)
+    top_p: float = Field(default=1.0, gt=0, le=1)
+    terminal_reward_weight: float = Field(default=1.0, ge=0)
+    process_reward_weight: float = Field(default=1.0, ge=0)
+    checkpoint_interval: int = Field(default=20, ge=1)
+    evaluation_interval: int = Field(default=20, ge=1)
+    resume_from: str | None = None
+
+
+class MultimodalFeatureRefV1(FrozenModel):
+    kind: Literal["audio", "image", "video"]
+    artifact_id: str
+    start_token: int = Field(ge=0)
+    end_token: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def ordered_span(self) -> "MultimodalFeatureRefV1":
+        if self.end_token <= self.start_token:
+            raise ValueError("multimodal feature span must be ordered")
+        return self
+
+
+class TrainingTurnV2(FrozenModel):
+    index: int = Field(ge=1)
+    input_ids: tuple[int, ...]
+    generated_ids: tuple[int, ...]
+    attention_mask: tuple[int, ...]
+    response_mask: tuple[int, ...]
+    position_ids: tuple[int, ...]
+    rollout_logprobs: tuple[float, ...]
+    multimodal_features: tuple[MultimodalFeatureRefV1, ...]
+    action: dict[str, Any]
+    reward_events: tuple[dict[str, Any], ...]
+    done: bool
+
+    @model_validator(mode="after")
+    def validate_training_alignment(self) -> "TrainingTurnV2":
+        total = len(self.input_ids) + len(self.generated_ids)
+        if len(self.attention_mask) != total or len(self.position_ids) != total:
+            raise ValueError("attention and position data must span prompt plus response")
+        if len(self.response_mask) != len(self.generated_ids):
+            raise ValueError("response mask must align with generated ids")
+        if len(self.rollout_logprobs) != len(self.generated_ids):
+            raise ValueError("rollout log-probabilities must align with generated ids")
+        if any(value not in {0, 1} for value in self.response_mask) or not any(self.response_mask):
+            raise ValueError("response mask must contain at least one trainable token")
+        if not all(math.isfinite(value) for value in self.rollout_logprobs):
+            raise ValueError("rollout log-probabilities must be finite")
+        return self
+
+
+class TrajectoryV2(FrozenModel):
+    schema_version: Literal["audioenv.trajectory/v2"] = "audioenv.trajectory/v2"
+    experiment_id: str
+    environment_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reward_version: str
+    task_id: str
+    episode_id: str
+    seed: int
+    model_id: str
+    checkpoint_id: str
+    policy_version: str
+    processor_config: dict[str, Any]
+    audio_artifacts: tuple[AudioArtifactV1, ...]
+    turns: tuple[TrainingTurnV2, ...]
+    terminal_reward: float
+    process_reward: float
+    done: bool
+    truncation_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_episode(self) -> "TrajectoryV2":
+        if not self.turns:
+            raise ValueError("trajectory requires at least one training turn")
+        if tuple(item.index for item in self.turns) != tuple(range(1, len(self.turns) + 1)):
+            raise ValueError("training turn indices must be contiguous")
+        if not self.done and self.truncation_reason is None:
+            raise ValueError("non-terminal trajectories require a truncation reason")
+        known_audio = {item.artifact_id for item in self.audio_artifacts}
+        if any(
+            feature.artifact_id not in known_audio
+            for turn in self.turns for feature in turn.multimodal_features
+            if feature.kind == "audio"
+        ):
+            raise ValueError("multimodal feature references missing audio")
+        return self
+
+
+class GPUExecutionPlanV1(FrozenModel):
+    schema_version: Literal["audioenv.gpu-execution/v1"] = "audioenv.gpu-execution/v1"
+    provider: Literal["local-cuda", "runpod-secure-cloud"]
+    image: str
+    image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    gpu_type: str
+    gpu_count: int = Field(ge=1)
+    memory_gb_per_gpu: int = Field(ge=1)
+    storage_gb: int = Field(ge=1)
+    secret_names: tuple[str, ...] = ()
+    max_runtime_hours: float = Field(gt=0)
+    max_total_budget_usd: float = Field(ge=0)
+    hourly_price_usd: float | None = Field(default=None, ge=0)
+    confirmation_name: str | None = None
+
+    @property
+    def maximum_cost_usd(self) -> float | None:
+        return None if self.hourly_price_usd is None else self.hourly_price_usd * self.max_runtime_hours
+

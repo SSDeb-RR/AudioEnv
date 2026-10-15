@@ -346,6 +346,25 @@ class PlatformRepository:
         with self.database.session() as session:
             return session.get(EnvironmentRecord, environment_id)
 
+    def promote_environment(self, environment_id: str, validation: dict[str, Any]) -> EnvironmentRecord:
+        with self.database.session() as session:
+            record = session.get(EnvironmentRecord, environment_id)
+            if record is None:
+                raise KeyError(environment_id)
+            package = json.loads(record.package_json)
+            package["authoring_status"] = "validated"
+            package.pop("content_hash", None)
+            package["content_hash"] = sha256(
+                json.dumps(package, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            record.authoring_status = "validated"
+            record.content_hash = package["content_hash"]
+            record.package_json = _dump(package)
+            record.validation_json = _dump(validation)
+            session.add(record)
+            session.commit()
+            return record
+
     def add_harness_build(
         self,
         *,

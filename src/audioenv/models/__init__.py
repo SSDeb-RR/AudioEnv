@@ -1,6 +1,9 @@
 from .base import ModelAction, NativeAudioModelAdapter, V1ModelAdapter
 from .caller import CallerAdapter, CallerTurn, ScriptedAudioCallerAdapter
 from .qwen3_omni import Qwen3OmniAgentAdapter, Qwen3OmniCallerAdapter
+from .omni_driver import (
+    ConformanceFixture, ModelConformanceRunner, OmniModelDriver, Qwen3OmniDriver,
+)
 
 __all__ = [
     "ModelAction",
@@ -11,4 +14,8 @@ __all__ = [
     "ScriptedAudioCallerAdapter",
     "Qwen3OmniAgentAdapter",
     "Qwen3OmniCallerAdapter",
+    "ConformanceFixture",
+    "ModelConformanceRunner",
+    "OmniModelDriver",
+    "Qwen3OmniDriver",
 ]

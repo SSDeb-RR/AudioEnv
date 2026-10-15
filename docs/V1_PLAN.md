@@ -6,7 +6,7 @@
 | 1 | Persistence, lifecycle, artifacts, API, worker, dashboard shell | API/browser tests and one-command local startup |
 | 2 | V1 IR, custom authoring, validation, τ² adapter, EnvHarness proof | Oracle/adversarial validation and immutable split manifest |
 | 3 | Qwen3 native caller/agent execution | GPU trace containing real bidirectional speech and a tool call |
-| 4 | CPU trainer and VeRL-Omni GSPO adapter | Parameter delta, reload parity, then GPU LoRA update evidence |
+| 4 | CPU trainer and VeRL-Omni GSPO/GRPO adapters | Parameter delta, reload parity, then GPU LoRA update evidence |
 | 5 | Held-out evaluation, comparisons, trace UI, exports | Persisted evidence behind every displayed metric |
 | 6 | Frozen end-to-end release workflow | Reproducibility bundle and completed acceptance report |
 
@@ -18,7 +18,7 @@ on the current non-CUDA host.
 Pinned research integration revisions at audit time:
 
 - EnvHarness `fab7d57441f06b75c73a900e04561d4d7600f361`.
-- VeRL-Omni `eebe8a983b742960b0887026191517fe66505260`.
+- VeRL-Omni v0.2 `49dedb6ec0691588494b629fc1b610a86612966b`.
 - Qwen checkpoint revisions must be captured by the model probe before use.
 - τ² source and task hashes must be captured during import rather than relying
   on an unpinned `main` checkout.

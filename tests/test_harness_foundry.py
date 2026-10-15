@@ -46,7 +46,7 @@ def test_registry_rejects_duplicates_and_resolves_real_compatibility():
         model_capabilities=("native-wav-input", "structured-tools", "trainable", "pytorch-state-dict"),
     )
     local = next(item for item in report.trainers if item.harness_id == "audioenv/small-audio-reinforce")
-    gpu = next(item for item in report.trainers if item.harness_id == "verl-omni/qwen3-gspo")
+    gpu = next(item for item in report.trainers if item.harness_id == "qwen3-omni-thinker-gspo-lora")
     assert local.compatible
     assert not gpu.compatible
     assert any("token-logprobs" in reason for reason in gpu.reasons)

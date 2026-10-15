@@ -18,7 +18,7 @@ import subprocess
 from typing import Any
 
 from .adapter import EnvironmentPackage
-from .adapters import JsonBenchmarkAdapter
+from .adapters import HarborEnvironmentAdapter, JsonBenchmarkAdapter
 from .artifacts import LocalArtifactStore
 from .authoring import AuthoredEnvironment, CustomTaskInput, DeterministicEnvironmentAuthor
 from .contracts import (
@@ -37,6 +37,7 @@ from .harnesses import (
 )
 from .harnesses.codex_author import CodexEnvironmentAuthor
 from .validation import ValidationReport, validate_package
+from .integrations.repo2rlenv import DockerSandboxExecutor, Repo2RLEnvGenerator
 
 
 _GITHUB = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$")
@@ -47,6 +48,7 @@ class EnvironmentBuild:
     report: SourceAnalysisReport
     authored: AuthoredEnvironment | None = None
     generated_payload: dict[str, Any] | None = None
+    boundary: EnvironmentPackageV1 | None = None
 
 
 class SourceMaterializer:
@@ -81,15 +83,42 @@ class EnvironmentFoundry:
         workspace: Path,
         artifacts: LocalArtifactStore,
         codex_author: CodexEnvironmentAuthor | None = None,
+        repo_generator: Repo2RLEnvGenerator | None = None,
     ):
         self.materializer = SourceMaterializer(workspace)
         self.artifacts = artifacts
         self.codex_author = codex_author or CodexEnvironmentAuthor()
+        self.repo_generator = repo_generator or Repo2RLEnvGenerator(DockerSandboxExecutor())
 
-    def build(self, source_uri: str, *, authoring_provider: str = "deterministic") -> EnvironmentBuild:
+    def build(
+        self, source_uri: str, *, authoring_provider: str = "deterministic",
+        repo_pipeline: str = "pr_runtime", repo_limit: int = 5, repo_llm: str | None = None,
+    ) -> EnvironmentBuild:
         source, revision = self.materializer.materialize(source_uri)
         root = source if source.is_dir() else source.parent
         inventory = _inventory(root)
+        if authoring_provider == "repo2rlenv":
+            if not source.is_dir():
+                raise ValueError("Repo2RLEnv requires a repository directory")
+            output = self.materializer.workspace / (sha256((source_uri + repo_pipeline).encode()).hexdigest()[:16] + "-harbor")
+            output.mkdir(parents=True, exist_ok=True)
+            generation = self.repo_generator.generate(
+                source, output, pipeline=repo_pipeline, limit=repo_limit, llm=repo_llm,
+            )
+            boundary, bundles = HarborEnvironmentAdapter(self.artifacts).convert(
+                output, environment_id=f"repo2rlenv/{source.name}",
+                source_uri=source_uri, revision=revision,
+            )
+            report_artifact = self.artifacts.put_json(generation)
+            report = SourceAnalysisReport(
+                source_uri=source_uri, source_kind="repository", classification="harbor_repository",
+                status="needs_review", detected_files=inventory, task_count=len(bundles),
+                proposed_adapter="audioenv/harbor", verifier_source="Harbor private tests",
+                execution_mode="oci_sandbox", generated_files=(report_artifact.id, boundary.protected_verifier.artifact_id),
+                validation_checks=(), review_items=("run Harbor oracle, no-op, adversarial, determinism, leakage, and integrity gates",),
+                environment_id=f"{boundary.id}@{boundary.version}",
+            )
+            return EnvironmentBuild(report, generated_payload=generation, boundary=boundary)
         task_manifest = _first_named(source, ("audioenv-task.json",))
         benchmark_manifest = _first_named(source, ("audioenv.json", "authoring.json", "benchmark.json"))
         if task_manifest is not None:
@@ -173,8 +202,22 @@ class EnvironmentFoundry:
                 environment_id=f"{boundary.id}@{boundary.version}",
             )
             return EnvironmentBuild(report, authored, candidate.model_dump(mode="json"))
+        harbor_manifest = _first_named(source, ("task.toml", "registry.json"))
+        if harbor_manifest is not None:
+            boundary, bundles = HarborEnvironmentAdapter(self.artifacts).convert(
+                root, environment_id=f"harbor/{root.name}", source_uri=source_uri, revision=revision,
+            )
+            report = SourceAnalysisReport(
+                source_uri=source_uri, source_kind="repository", classification="harbor_repository",
+                status="needs_review", detected_files=inventory, task_count=len(bundles),
+                proposed_adapter="audioenv/harbor", verifier_source="Harbor private tests",
+                execution_mode="oci_sandbox", generated_files=(boundary.protected_verifier.artifact_id,),
+                review_items=("run the protected sandbox promotion gates",),
+                environment_id=f"{boundary.id}@{boundary.version}",
+            )
+            return EnvironmentBuild(report, boundary=boundary)
         if authoring_provider != "deterministic":
-            raise ValueError("authoring_provider must be deterministic or codex")
+            raise ValueError("authoring_provider must be deterministic, codex, or repo2rlenv")
         tests = tuple(item for item in inventory if _looks_like_test(item))
         if tests:
             scaffold = {
@@ -230,7 +273,10 @@ class ModelFoundry:
                 model_id=model_id, source=source, detected_family=family, selected_driver=driver,
                 status="blocked", capabilities=capabilities,
                 conformance_checks=tuple(checks),
-                compatible_trainers=tuple(item.harness_id for item in compatibility.trainers if not item.reasons or item.harness_id.startswith("verl-omni/")),
+                compatible_trainers=tuple(
+                    item.harness_id for item in compatibility.trainers
+                    if not item.reasons or item.harness_id.startswith("qwen3-omni-")
+                ),
                 review_items=("run the CUDA load, native-audio generation, log-probability, LoRA, and reload conformance gates",),
             )
         scaffold = {

@@ -3,7 +3,7 @@
 Audit date: 2026-10-15  
 AudioEnv commit: `24b7d033779e2adea95df4777235214121ad8af7`  
 EnvHarness commit inspected: `fab7d57441f06b75c73a900e04561d4d7600f361`  
-VeRL-Omni commit selected for the GPU gate: `eebe8a983b742960b0887026191517fe66505260`
+VeRL-Omni v0.2 commit selected for the GPU gate: `49dedb6ec0691588494b629fc1b610a86612966b`
 
 ## Evidence summary
 
