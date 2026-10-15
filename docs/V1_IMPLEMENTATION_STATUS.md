@@ -7,6 +7,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ## Working
 
+- A provider-neutral `audioenv-gpu-worker run experiment.json` command now
+  consumes an immutable typed bundle, emits versioned JSONL lifecycle events,
+  supports safe-boundary cancellation, and writes a content-hashed artifact
+  manifest. Its local backend has completed a real optimizer/checkpoint/reload/
+  evaluation run; the Qwen backend remains CUDA-gated.
+
 - `audioenv app --data-dir .audioenv` applies Alembic migrations, recovers
   abandoned jobs, and serves FastAPI plus the compiled React SPA from one
   loopback URL. The wheel includes the SPA and migrations, so Node is required
@@ -93,7 +99,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-60 passed
+63 passed
 
 uv run audioenv validate
 341 passed, 0 failed

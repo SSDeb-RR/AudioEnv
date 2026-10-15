@@ -43,6 +43,7 @@ tau2 = [
 
 [project.scripts]
 audioenv = "audioenv.cli:main"
+audioenv-gpu-worker = "audioenv.platform.gpu_worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/audioenv"]

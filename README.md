@@ -58,6 +58,8 @@ full-duplex streaming, or closed-model RL.
 - `TrajectoryV2`, a model-driven caller/agent rollout worker, and distinct
   VeRL-Omni v0.2 GSPO and GRPO Thinker-LoRA plugins. These paths are code-ready
   but remain GPU-unverified.
+- A provider-neutral `audioenv-gpu-worker` bundle/event/artifact contract used
+  by the verified local training backend and the CUDA-gated Qwen backend.
 
 The bundled WAV renderer generates deterministic audio fixtures for tests. It
 is not a speech synthesizer. A real deployment must inject a native-audio user
@@ -204,6 +206,7 @@ src/audioenv/models/          scripted and Qwen3-Omni adapter implementations
 src/audioenv/training/        CPU trainer and VeRL-Omni launch boundary
 src/audioenv/platform/        API, persistence, worker, execution, and exports
 web/                          React/TypeScript operator dashboard
+docker/gpu-worker/            immutable-base GPU worker image definition
 ```
 
 ## Release gates not claimed by this repository

@@ -575,3 +575,68 @@ class GPUExecutionPlanV1(FrozenModel):
     def maximum_cost_usd(self) -> float | None:
         return None if self.hourly_price_usd is None else self.hourly_price_usd * self.max_runtime_hours
 
+
+class GPUWorkerExperimentV1(FrozenModel):
+    """Portable input consumed identically by local and cloud GPU workers."""
+
+    schema_version: Literal["audioenv.gpu-worker-experiment/v1"] = "audioenv.gpu-worker-experiment/v1"
+    experiment_id: str
+    run_name: str
+    backend: Literal["tiny-cpu-proof", "qwen3-omni-verl"]
+    trainer: Literal[
+        "audioenv/small-audio-reinforce",
+        "qwen3-omni-thinker-gspo-lora",
+        "qwen3-omni-thinker-grpo-lora",
+    ]
+    algorithm: Literal["reinforce", "gspo", "grpo"]
+    environment_manifest: str | None = None
+    model_path: str | None = None
+    caller_model_path: str | None = None
+    rollout_dataset_path: str | None = None
+    verl_checkout: str | None = None
+    output_dir: str
+    hyperparameters: dict[str, Any] = Field(default_factory=dict)
+    dependency_pins: dict[str, str] = Field(default_factory=dict)
+    resume_from: str | None = None
+    cancellation_file: str | None = None
+
+    @model_validator(mode="after")
+    def validate_backend(self) -> "GPUWorkerExperimentV1":
+        if self.backend == "tiny-cpu-proof":
+            if self.trainer != "audioenv/small-audio-reinforce" or self.algorithm != "reinforce":
+                raise ValueError("tiny-cpu-proof requires the local REINFORCE trainer")
+        else:
+            required = {
+                "environment_manifest": self.environment_manifest,
+                "model_path": self.model_path,
+                "caller_model_path": self.caller_model_path,
+                "rollout_dataset_path": self.rollout_dataset_path,
+                "verl_checkout": self.verl_checkout,
+            }
+            missing = sorted(name for name, value in required.items() if not value)
+            if missing:
+                raise ValueError("qwen3-omni-verl requires " + ", ".join(missing))
+            expected = f"qwen3-omni-thinker-{self.algorithm}-lora"
+            if self.trainer != expected or self.algorithm not in {"gspo", "grpo"}:
+                raise ValueError("Qwen backend trainer and algorithm do not match")
+        return self
+
+    @property
+    def content_hash(self) -> str:
+        return sha256(
+            json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+class GPUWorkerEventV1(FrozenModel):
+    schema_version: Literal["audioenv.gpu-worker-event/v1"] = "audioenv.gpu-worker-event/v1"
+    sequence: int = Field(ge=1)
+    experiment_id: str
+    type: Literal[
+        "worker.started", "preflight.completed", "training.started", "metric",
+        "checkpoint.saved", "evaluation.completed", "artifact.manifest",
+        "worker.cancelled", "worker.failed", "worker.completed",
+    ]
+    timestamp: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
