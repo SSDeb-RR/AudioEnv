@@ -45,8 +45,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   or creates a reviewable driver-conformance scaffold for an unknown model.
   Caller and trainer choices in the run wizard are resolved from declared
   capabilities instead of a hard-coded menu.
-- The Foundry can invoke pinned Repo2RLEnv `v0.9.3` in a restricted Docker
-  boundary and import its Harbor task output. Harbor instructions remain public
+- The Foundry can invoke Repo2RLEnv `v0.9.3` through a restricted Python 3.12
+  `uv` worker for the `pr_diff` pipeline and import its Harbor task output.
+  Docker-dependent pipelines are rejected rather than mounting the host socket.
+  Harbor instructions remain public
   while verifier paths and hashes are stored in a protected artifact.
 - Generated environments use an explicit promotion report. Sandbox build,
   oracle, no-op, adversarial, determinism, state-isolation, leakage,

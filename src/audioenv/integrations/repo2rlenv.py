@@ -64,23 +64,31 @@ class DockerSandboxExecutor:
 
 
 class Repo2RLEnvGenerator:
-    image = f"ghcr.io/audioenv/repo2rlenv:{REPO2RLENV_VERSION}-{REPO2RLENV_COMMIT[:12]}"
+    # The official package is invoked in an isolated Python 3.12 uv image.
+    # Runtime pipelines need Docker; AudioEnv will not mount the host socket.
+    image = "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
 
     def __init__(self, executor: SandboxExecutor):
         self.executor = executor
 
     def generate(
-        self, repository: Path, output: Path, *, pipeline: str = "pr_runtime",
+        self, repository: Path, output: Path, *, pipeline: str = "pr_diff",
         limit: int = 5, llm: str | None = None, policy: SandboxPolicyV1 | None = None,
     ) -> dict[str, object]:
         if pipeline not in {"pr_runtime", "commit_runtime", "pr_diff"}:
             raise ValueError("unsupported Repo2RLEnv pipeline")
+        if pipeline != "pr_diff":
+            raise RuntimeError(
+                f"{pipeline} requires a nested/sibling Docker executor; AudioEnv refuses to mount "
+                "the host Docker socket. Use pr_diff or configure a future sandbox provider."
+            )
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
         policy = policy or SandboxPolicyV1(network="bootstrap-only")
         output.mkdir(parents=True, exist_ok=True)
         command = [
-            "repo2rlenv", "generate", "--repo", "/source", "--pipeline", pipeline,
+            "uvx", "--from", f"repo2rlenv=={REPO2RLENV_VERSION}",
+            "repo2rlenv", "--no-ui", "generate", "--repo", "/source", "--pipeline", pipeline,
             "--pipeline-opt", f"limit={limit}", "--out", "/output",
         ]
         if llm:

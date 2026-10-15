@@ -51,8 +51,10 @@ loaded.
 
 Repo2RLEnv generation is an explicit Foundry mode pinned to commit
 `e5e6a93a6d7947a012a361b68457a982cc85fc9e`. It runs behind the restricted
-`SandboxExecutor`, produces Harbor tasks, and is imported without putting
-private test scripts into public task records. Promotion is computed only when
+`SandboxExecutor` for its `pr_diff` path, produces Harbor tasks, and is
+imported without putting private test scripts into public task records.
+Docker-dependent Repo2RLEnv pipelines remain unavailable until a sibling
+sandbox executor exists; the host Docker socket is never mounted. Promotion is computed only when
 sandbox, oracle, negative, determinism, isolation, leakage, reward-integrity,
 and verifier-immutability gates all pass.
 

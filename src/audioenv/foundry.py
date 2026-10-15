@@ -92,7 +92,7 @@ class EnvironmentFoundry:
 
     def build(
         self, source_uri: str, *, authoring_provider: str = "deterministic",
-        repo_pipeline: str = "pr_runtime", repo_limit: int = 5, repo_llm: str | None = None,
+        repo_pipeline: str = "pr_diff", repo_limit: int = 5, repo_llm: str | None = None,
     ) -> EnvironmentBuild:
         source, revision = self.materializer.materialize(source_uri)
         root = source if source.is_dir() else source.parent

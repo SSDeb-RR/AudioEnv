@@ -121,11 +121,13 @@ def test_repo2rlenv_uses_pinned_isolated_protocol(tmp_path: Path):
     sandbox = _FakeSandbox()
     report = Repo2RLEnvGenerator(sandbox).generate(source, output, limit=2)
     _, command, kwargs = sandbox.call
-    assert command[:2] == ("repo2rlenv", "generate")
+    assert command[:4] == ("uvx", "--from", "repo2rlenv==0.9.3", "repo2rlenv")
     assert kwargs["bootstrap_network"] is True
     assert kwargs["policy"].host_socket is False
     assert kwargs["policy"].inherit_secrets is False
     assert report["commit"] == "e5e6a93a6d7947a012a361b68457a982cc85fc9e"
+    with pytest.raises(RuntimeError, match="refuses to mount"):
+        Repo2RLEnvGenerator(sandbox).generate(source, output, pipeline="pr_runtime")
 
 
 def test_v2_batch_checks_groups_versions_and_logprob_parity():

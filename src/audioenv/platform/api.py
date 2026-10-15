@@ -87,7 +87,7 @@ class EnvironmentFoundryRequest(StrictRequest):
     project_id: str | None = None
     source_uri: str = Field(min_length=1, max_length=4_096)
     authoring_provider: Literal["deterministic", "codex", "repo2rlenv"] = "deterministic"
-    repo_pipeline: Literal["pr_runtime", "commit_runtime", "pr_diff"] = "pr_runtime"
+    repo_pipeline: Literal["pr_runtime", "commit_runtime", "pr_diff"] = "pr_diff"
     repo_limit: int = Field(default=5, ge=1, le=100)
     repo_llm: str | None = Field(default=None, max_length=200)
 
