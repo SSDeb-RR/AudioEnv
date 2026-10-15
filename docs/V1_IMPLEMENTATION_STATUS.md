@@ -93,6 +93,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   and fails closed if either is absent. This closes the prior architectural
   gap where Thinker-only rollout could not produce natively bound agent audio;
   CUDA execution of the bridge remains a release gate.
+- The frozen Qwen caller now has a loopback-only service boundary with one
+  model resident on its assigned GPU set and isolated conversation state for
+  every rollout. Private goals remain inside the service, responses return
+  native WAV bytes, and the client refuses non-loopback URLs. The GPU worker
+  starts, health-checks, monitors, and stops this service separately from
+  VeRL, with disjoint caller and trainer GPU allocations.
 
 ## Partial
 
@@ -121,9 +127,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   pinned VeRL `AgentLoopBase` when loaded in the CUDA worker, converts an
   append-only `TrajectoryV2` into VeRL's exact prompt/response/mask/log-prob
   output, and masks caller/tool observation tokens to zero. It refuses an
-  implicit scripted fallback. The reviewed Qwen caller/tau2 runtime factory
-  that drives VeRL's live policy server is still not implemented, and this
-  loop has not run inside the GPU worker.
+  implicit scripted fallback. The frozen Qwen caller service is implemented,
+  but the reviewed tau2 episode runtime that drives VeRL's live policy server
+  and hands native multimodal inputs back for processor-derived RoPE positions
+  is still not implemented. This loop has not run inside the GPU worker.
 - RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
   runtime/budget stops, reconnect, and SFTP command construction. Live API,
   SSH event streaming, and artifact collection are not verified.
@@ -151,7 +158,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-87 passed
+91 passed
 
 uv run audioenv validate
 389 passed, 0 failed

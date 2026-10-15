@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from audioenv.contracts import GPUWorkerExperimentV1
-from audioenv.platform.gpu_worker import load_experiment, run_experiment
+from audioenv.platform.gpu_worker import QwenGPUAllocation, load_experiment, run_experiment
 
 
 def test_worker_bundle_rejects_incompatible_backend():
@@ -53,3 +53,13 @@ def test_worker_cancellation_is_a_terminal_event(tmp_path: Path):
     assert run_experiment(bundle) == 130
     events = (tmp_path / "cancelled" / "events.jsonl").read_text()
     assert '"type":"worker.cancelled"' in events
+
+
+def test_qwen_gpu_allocation_is_explicit_and_disjoint():
+    allocation = QwenGPUAllocation.from_hyperparameters({})
+    assert allocation.trainer == "0,1,2,3"
+    assert allocation.caller == "4,5"
+    with pytest.raises(ValueError, match="disjoint"):
+        QwenGPUAllocation.from_hyperparameters({
+            "trainer_cuda_devices": "0,1,2,3", "caller_cuda_devices": "3,4",
+        })

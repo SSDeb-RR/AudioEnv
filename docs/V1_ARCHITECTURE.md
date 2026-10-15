@@ -122,6 +122,20 @@ GRPO plugins delegate Qwen3 Thinker LoRA to VeRL-Omni v0.2 pinned at
 advantages. Talker, codec, audio tower, caller, and reference policy remain
 frozen. Environment and reward code contain no optimizer-specific behavior.
 
+For Qwen training, the frozen caller is a separate loopback service owned by
+the GPU worker. It keeps one checkpoint resident on caller-only GPUs,
+serializes inference through that checkpoint, and stores independent private
+goal/history state behind opaque session IDs. VeRL workers receive only caller
+audio and public turn metadata; they never receive the private goal. Trainer
+and caller CUDA device sets must be disjoint, and loss of the caller process
+fails the training job.
+
+The VeRL episode runtime must return native multimodal inputs to VeRL's normal
+agent-loop postprocessor. That postprocessor, not AudioEnv, derives Qwen's
+multi-channel RoPE positions. AudioEnv binds those positions to persisted
+training records and must never substitute flat synthetic positions for a
+native Qwen rollout.
+
 ## Persistence and lifecycle
 
 Relational storage contains projects, registries, immutable experiment hashes

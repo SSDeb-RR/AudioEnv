@@ -15,6 +15,7 @@ class CallerTurn:
     audio: bytes
     source: str
     turn_index: int
+    semantic_text: str | None = None
 
 
 class CallerAdapter(Protocol):

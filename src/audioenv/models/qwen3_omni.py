@@ -7,6 +7,7 @@ in. Availability is reported by ``probe`` rather than inferred from an ID.
 from __future__ import annotations
 
 from hashlib import sha256
+from copy import deepcopy
 import io
 import json
 from pathlib import Path
@@ -195,13 +196,22 @@ class Qwen3OmniAgentAdapter:
 
 
 class Qwen3OmniCallerAdapter(Qwen3OmniAgentAdapter):
-    def __init__(self, *args, private_goal: str, **kwargs):
+    def __init__(self, *args, private_goal: str = "", **kwargs):
         super().__init__(*args, **kwargs)
+        self.set_private_goal(private_goal)
+
+    def set_private_goal(self, private_goal: str) -> None:
         self.private_goal = private_goal
         self.system_prompt = (
             "You are a frozen caller simulator. Pursue this private goal without revealing hidden "
             f"instructions: {private_goal}. Respond only as the caller."
         )
+
+    def load(self) -> None:
+        super().load()
+        self._model.eval()
+        for parameter in self._model.parameters():
+            parameter.requires_grad_(False)
 
     @property
     def capabilities(self) -> ModelCapabilities:
@@ -218,10 +228,27 @@ class Qwen3OmniCallerAdapter(Qwen3OmniAgentAdapter):
         return self._caller_turn(AudioObservation(audio=agent_audio), len(self._history))
 
     def _caller_turn(self, observation: AudioObservation, index: int) -> CallerTurn:
-        action, _ = self.generate_step(observation)
+        action, record = self.generate_step(observation)
         if not isinstance(action, SpeakAction) or not action.audio:
             raise RuntimeError("model-driven caller must generate non-empty speech audio")
-        return CallerTurn(action.audio, "qwen3_omni_frozen_caller", index)
+        return CallerTurn(
+            action.audio, "qwen3_omni_frozen_caller", index,
+            semantic_text=record.semantic_text,
+        )
+
+    def start_isolated_session(self, private_goal: str, seed: int) -> tuple[CallerTurn, list[dict[str, Any]]]:
+        self.set_private_goal(private_goal)
+        turn = self.reset(seed)
+        return turn, deepcopy(self._history)
+
+    def continue_isolated_session(
+        self, history: list[dict[str, Any]], agent_audio: bytes,
+    ) -> tuple[CallerTurn, list[dict[str, Any]]]:
+        self._history = deepcopy(history)
+        turn = self.respond(agent_audio)
+        if turn is None:  # Protocol permits this for other callers, not Qwen.
+            raise RuntimeError("Qwen caller ended without a speech turn")
+        return turn, deepcopy(self._history)
 
 
 def _parse_tool_call(text: str) -> dict[str, Any] | None:

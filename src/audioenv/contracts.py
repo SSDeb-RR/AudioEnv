@@ -625,6 +625,7 @@ class GPUWorkerExperimentV1(FrozenModel):
     caller_model_path: str | None = None
     rollout_dataset_path: str | None = None
     verl_checkout: str | None = None
+    tau2_checkout: str | None = None
     output_dir: str
     hyperparameters: dict[str, Any] = Field(default_factory=dict)
     dependency_pins: dict[str, str] = Field(default_factory=dict)
@@ -643,6 +644,7 @@ class GPUWorkerExperimentV1(FrozenModel):
                 "caller_model_path": self.caller_model_path,
                 "rollout_dataset_path": self.rollout_dataset_path,
                 "verl_checkout": self.verl_checkout,
+                "tau2_checkout": self.tau2_checkout,
             }
             missing = sorted(name for name, value in required.items() if not value)
             if missing:
@@ -664,7 +666,7 @@ class GPUWorkerEventV1(FrozenModel):
     sequence: int = Field(ge=1)
     experiment_id: str
     type: Literal[
-        "worker.started", "preflight.completed", "training.started", "metric",
+        "worker.started", "preflight.completed", "training.started", "metric", "service.started",
         "checkpoint.saved", "evaluation.completed", "artifact.manifest",
         "worker.cancelled", "worker.failed", "worker.completed",
     ]

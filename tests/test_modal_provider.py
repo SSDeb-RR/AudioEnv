@@ -43,7 +43,8 @@ def _experiment(tmp_path):
         experiment_id="exp-1", run_name="qwen-proof", backend="qwen3-omni-verl",
         trainer="qwen3-omni-thinker-gspo-lora", algorithm="gspo",
         environment_manifest=str(manifest), model_path=str(required), caller_model_path=str(required),
-        rollout_dataset_path=str(data), verl_checkout=str(required), output_dir="/workspace/runs/exp-1/output",
+        rollout_dataset_path=str(data), verl_checkout=str(required), tau2_checkout=str(required),
+        output_dir="/workspace/runs/exp-1/output",
     )
 
 
