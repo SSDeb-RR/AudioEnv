@@ -9,8 +9,8 @@ def test_exported_public_package_can_be_inspected(tmp_path):
     source = _authoring_manifest(tmp_path, package)
     adapter = JsonBenchmarkAdapter(package.tool_handlers)
     summary = adapter.inspect(source)
-    assert summary["task_count"] == 2
-    assert summary["splits"] == ["test", "train"]
+    assert summary["task_count"] == 48
+    assert summary["splits"] == ["test", "train", "validation"]
 
 
 def test_conversion_requires_explicit_audited_handlers(tmp_path):

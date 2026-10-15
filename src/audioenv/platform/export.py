@@ -39,11 +39,42 @@ def export_experiment(repository: PlatformRepository, experiment_id: str, destin
                 "environment_hash": row.environment_hash,
                 "verifier_hash": row.verifier_hash,
                 "split": row.split,
+                "protocol_hash": row.protocol_hash,
                 "config": _redact(json.loads(row.config_json)),
                 "metrics": json.loads(row.metrics_json),
+                "samples": [
+                    {
+                        "task_id": sample.task_id,
+                        "audio_profile_id": sample.audio_profile_id,
+                        "seed": sample.seed,
+                        "passed": sample.passed,
+                        "reward": sample.reward,
+                        **json.loads(sample.details_json),
+                    }
+                    for sample in repository.list_evaluation_samples(row.id)
+                ],
             }
             for row in repository.list_evaluations()
             if row.experiment_id == experiment_id
+        ],
+        "comparisons": [
+            {
+                "id": row.id,
+                "baseline_evaluation_id": row.baseline_evaluation_id,
+                "trained_evaluation_id": row.trained_evaluation_id,
+                "compatibility_hash": row.compatibility_hash,
+                "result": json.loads(row.result_json),
+            }
+            for row in repository.list_comparisons(experiment_id)
+        ],
+        "logs": [
+            {
+                "level": row.level,
+                "message": row.message,
+                "payload": _redact(json.loads(row.payload_json)),
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in repository.list_logs(experiment_id)
         ],
         "artifacts": [
             {

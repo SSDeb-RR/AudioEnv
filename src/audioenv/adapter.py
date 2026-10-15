@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from .spec import EnvironmentSpec, JSONValue, TaskSpec
+from .spec import Action, EnvironmentSpec, JSONValue, TaskSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +23,7 @@ class EnvironmentPackage:
     spec: EnvironmentSpec
     tasks: tuple[TaskSpec, ...]
     tool_handlers: dict[str, ToolHandler]
+    public_action_candidates: dict[str, tuple[Action, ...]] = field(default_factory=dict)
 
     def task(self, task_id: str) -> TaskSpec:
         for task in self.tasks:

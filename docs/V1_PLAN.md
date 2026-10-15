@@ -18,7 +18,7 @@ on the current non-CUDA host.
 Pinned research integration revisions at audit time:
 
 - EnvHarness `fab7d57441f06b75c73a900e04561d4d7600f361`.
-- VeRL-Omni `f31a6116119fd62a89554987f51ae279a567d66b`.
+- VeRL-Omni `eebe8a983b742960b0887026191517fe66505260`.
 - Qwen checkpoint revisions must be captured by the model probe before use.
 - τ² source and task hashes must be captured during import rather than relying
   on an unpinned `main` checkout.
@@ -26,17 +26,16 @@ Pinned research integration revisions at audit time:
 ## Current milestone status
 
 - Milestone 0: complete and verified.
-- Milestone 1: local foundation complete; multi-process recovery is covered by
-  persisted heartbeat logic and tests, while cloud execution is intentionally
-  absent.
-- Milestone 2: custom authoring and EnvHarness proof complete. The pinned τ²
-  source importer is complete; its isolated executable tool/verifier worker is
-  still open.
+- Milestone 1: complete for the local product. `audioenv app` packages and
+  serves the SPA/API, migrations, lifecycle, logs, projects, and recovery.
+- Milestone 2: reference V2, custom authoring, and EnvHarness proof complete.
+  The pinned τ² Python 3.12 JSONL worker is implemented but not executed on the
+  current host, so upstream parity remains partial.
 - Milestone 3: adapter and preflight code complete, GPU execution blocked.
-- Milestone 4: CPU trainer complete, VeRL-Omni launch boundary complete, GPU
-  optimizer execution blocked.
-- Milestone 5: local metrics, evaluations, artifacts, comparisons, and dashboard
-  complete for the CPU slice; independent native-audio evaluation remains open.
+- Milestone 4: non-oracle CPU trainer, resume/checkpoint state, and reload gate
+  complete. VeRL agent-loop batch bridge is implemented; GPU execution blocked.
+- Milestone 5: local logs, metrics, 24-sample held-out evaluations, compatible
+  paired comparison, artifacts, and dashboard workflow complete.
 - Milestone 6: local workflow complete; native Qwen release workflow blocked on
   approved CUDA infrastructure.
 

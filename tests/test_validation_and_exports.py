@@ -19,7 +19,7 @@ def test_export_redacts_oracles(tmp_path):
     assert "expected_state" not in text
     payload = json.loads(text)
     assert payload["format"] == "audioenv/v1"
-    assert len(payload["tasks"]) == 2
+    assert len(payload["tasks"]) == 48
     private = (tmp_path / ".audioenv-private" / "verifier.json").read_text()
     assert "expected_state" in private
     assert "oracle_actions" not in private

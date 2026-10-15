@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "audioenv-foundry"
-version = "0.2.0"
+version = "0.3.0"
 description = "Audio-native, deterministic RL environments for speech-to-speech agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,6 +45,10 @@ audioenv = "audioenv.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/audioenv"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"web/dist" = "audioenv/web_dist"
+"migrations" = "audioenv/migrations"
 
 [tool.hatch.metadata]
 allow-direct-references = true

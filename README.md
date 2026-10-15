@@ -1,10 +1,10 @@
 # AudioEnv Foundry
 
-> **V1 status: local platform preview.** The repository now contains a real
-> CPU policy-update workflow, persistent experiment lifecycle, API, dashboard,
-> checkpoint reload, and evaluation records. Native Qwen3-Omni inference and
-> VeRL-Omni training are implemented behind strict probes but remain unverified
-> on this non-CUDA host. See [`docs/V1_ACCEPTANCE_CRITERIA.md`](docs/V1_ACCEPTANCE_CRITERIA.md).
+> **V1 status: local product acceptance passes; native GPU gate blocked.** The
+> one-command web product performs a real non-oracle CPU policy update, reloads
+> its checkpoint, and produces a protocol-safe 24-sample held-out comparison.
+> Qwen3-Omni/VeRL-Omni remains unverified on this non-CUDA host. See
+> [`docs/V1_IMPLEMENTATION_STATUS.md`](docs/V1_IMPLEMENTATION_STATUS.md).
 
 AudioEnv Foundry is an Apache-2.0, trainer-neutral foundation for turning
 structured agent benchmarks into deterministic, turn-based, audio-native RL
@@ -23,7 +23,7 @@ closed-model RL.
 - Milestone-only process rewards; unrelated successful calls earn nothing.
 - Penalties for invalid, repeated, and unauthorized calls.
 - JSON benchmark adapter with an explicit audited tool-handler registry.
-- Fictional retail and dual-control telecom reference tasks.
+- Frozen 48-task retail/telecom corpus with disjoint 32/8/8 splits.
 - Oracle, no-op, mutation, determinism, leakage, and parallel-isolation checks.
 - Leakage-safe public export plus separately stored private verifier material.
 - Local parallel rollouts and trainer-neutral JSONL export with tokens/logprobs.
@@ -38,8 +38,8 @@ closed-model RL.
   metrics, evaluations, artifacts, cancellation, worker heartbeats, and
   abandoned-worker recovery.
 - FastAPI service and React/TypeScript dashboard driven by persisted records.
-- A genuine Torch policy-gradient CPU proof with parameter updates, checkpoint
-  save/reload, and baseline-versus-trained evaluation.
+- A genuine audio-conditioned Torch REINFORCE workflow with no oracle replay,
+  train-only optimization, checkpoint reload, and 24-sample held-out comparison.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
 
@@ -58,14 +58,13 @@ uv run audioenv demo --domain retail --trajectory oracle --output outputs/retail
 uv run audioenv demo --domain telecom --trajectory wrong
 uv run audioenv export outputs/reference-environment
 
-# V1 local platform and real CPU optimizer proof
+# V1 production app and real CPU optimizer proof
 uv sync --extra dev --extra platform --extra train
-uv run audioenv platform-demo --root outputs/platform-demo --steps 40
-cd web && npm install && cd ..
-uv run audioenv dev --database outputs/platform-demo/audioenv.db
+cd web && npm install && npm run build && cd ..
+uv run audioenv app --data-dir .audioenv
 
-# `audioenv dev` supervises the loopback API and dashboard. Training workers
-# are started as local subprocesses only after an explicitly confirmed launch.
+# Open http://127.0.0.1:8000. The wheel includes the compiled SPA; Node is
+# needed only to rebuild it. `audioenv dev` remains the hot-reload command.
 
 # This does not download weights; it reports why Qwen is or is not available.
 uv run --extra qwen audioenv qwen-probe
@@ -150,8 +149,8 @@ artifacts, policy versions, and episode boundaries are validated together.
 Transformers processor/model interfaces, preserve semantic-token/Talker-audio
 binding, and parse constrained structured tool envelopes. Their `probe()` does
 not download weights and reports missing CUDA, checkpoint, dependency, and
-capacity requirements explicitly. The CPU `TinyAudioPolicyTrainer` is a real
-optimizer mechanics proof; `VerlOmniGSPOTrainer` is a strict pinned launch
+capacity requirements explicitly. The CPU `SmallAudioToolPolicyTrainer` is a
+real audio-conditioned platform proof; `VerlOmniGSPOTrainer` is a strict pinned launch
 boundary for the external CUDA trainer and is not represented as having run on
 this host.
 
@@ -200,7 +199,7 @@ claimed until its corresponding evidence exists.
 
 ## Dashboard
 
-The dashboard exposes Overview, Models, Benchmarks & Tasks, Environments,
+The dashboard exposes Overview, Projects, Models, Benchmarks & Tasks, Environments,
 Training Runs, Evaluations, Artifacts, and Settings. It reads only backend
 records. Missing cost, GPU, evaluation, or model-probe data is displayed as
 unavailable rather than replaced with demo values.
@@ -220,4 +219,5 @@ npm run build
 - [`docs/V1_ARCHITECTURE.md`](docs/V1_ARCHITECTURE.md)
 - [`docs/V1_PLAN.md`](docs/V1_PLAN.md)
 - [`docs/V1_ACCEPTANCE_CRITERIA.md`](docs/V1_ACCEPTANCE_CRITERIA.md)
+- [`docs/V1_IMPLEMENTATION_STATUS.md`](docs/V1_IMPLEMENTATION_STATUS.md)
 

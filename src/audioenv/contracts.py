@@ -221,3 +221,143 @@ class ResourceEstimate(FrozenModel):
     available: bool
     reasons: tuple[str, ...] = ()
 
+
+class SplitManifestV1(FrozenModel):
+    schema_version: Literal["audioenv.split/v1"] = "audioenv.split/v1"
+    environment_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    train: tuple[str, ...]
+    validation: tuple[str, ...]
+    test: tuple[str, ...]
+    seeds: dict[str, tuple[int, ...]]
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @staticmethod
+    def hash_payload(payload: dict[str, Any]) -> str:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return sha256(encoded).hexdigest()
+
+    @model_validator(mode="after")
+    def validate_split(self) -> "SplitManifestV1":
+        groups = [set(self.train), set(self.validation), set(self.test)]
+        if any(groups[i] & groups[j] for i in range(3) for j in range(i + 1, 3)):
+            raise ValueError("task ids may appear in exactly one split")
+        payload = self.model_dump(mode="json")
+        payload.pop("content_hash", None)
+        if self.hash_payload(payload) != self.content_hash:
+            raise ValueError("split manifest content_hash does not match")
+        return self
+
+
+class ExperimentConfigV1(FrozenModel):
+    schema_version: Literal["audioenv.experiment/v1"] = "audioenv.experiment/v1"
+    project_id: str
+    environment_id: str
+    environment_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    split_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    agent_model_id: str
+    caller_model_id: str | None = None
+    trainer_id: str
+    provider_id: str
+    hyperparameters: dict[str, Any]
+    reward_version: str
+    seeds: tuple[int, ...]
+
+    @property
+    def content_hash(self) -> str:
+        return sha256(
+            json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+class EvaluationProtocolV1(FrozenModel):
+    schema_version: Literal["audioenv.evaluation-protocol/v1"] = "audioenv.evaluation-protocol/v1"
+    environment_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    split_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    split: Literal["validation", "test"]
+    caller_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    audio_pipeline_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sampling_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpoint_id: str
+    seeds: tuple[int, ...]
+
+    @property
+    def compatibility_hash(self) -> str:
+        data = self.model_dump(mode="json")
+        data.pop("checkpoint_id")
+        return sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    @property
+    def protocol_hash(self) -> str:
+        return sha256(
+            json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+class EvaluationSampleV1(FrozenModel):
+    task_id: str
+    audio_profile_id: str
+    seed: int
+    passed: bool
+    reward: float
+    safety_violations: int = Field(default=0, ge=0)
+    invalid_calls: int = Field(default=0, ge=0)
+    repeated_failed_calls: int = Field(default=0, ge=0)
+    failure_category: str | None = None
+
+
+class EvaluationResultV1(FrozenModel):
+    schema_version: Literal["audioenv.evaluation-result/v1"] = "audioenv.evaluation-result/v1"
+    protocol: EvaluationProtocolV1
+    samples: tuple[EvaluationSampleV1, ...]
+    success_rate: float = Field(ge=0, le=1)
+    success_ci_low: float = Field(ge=0, le=1)
+    success_ci_high: float = Field(ge=0, le=1)
+    mean_reward: float
+    reward_components: dict[str, float] = Field(default_factory=dict)
+    failure_counts: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_samples(self) -> "EvaluationResultV1":
+        if not self.samples:
+            raise ValueError("evaluation result requires samples")
+        return self
+
+
+class ComparisonV1(FrozenModel):
+    schema_version: Literal["audioenv.comparison/v1"] = "audioenv.comparison/v1"
+    baseline_protocol_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    trained_protocol_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compatibility_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compatible: bool
+    incompatibilities: tuple[str, ...] = ()
+    paired_sample_count: int = Field(ge=0)
+    baseline_success_rate: float | None = None
+    trained_success_rate: float | None = None
+    paired_delta: float | None = None
+    paired_ci_low: float | None = None
+    paired_ci_high: float | None = None
+
+
+class TrainerDescriptor(FrozenModel):
+    id: str
+    display_name: str
+    capabilities: TrainerCapabilities
+    configuration_schema: dict[str, Any]
+    required_rollout_fields: tuple[str, ...]
+    status: Literal["available", "blocked", "unavailable"]
+    status_reason: str | None = None
+
+
+class ExecutionProviderDescriptor(FrozenModel):
+    id: str
+    display_name: str
+    local: bool
+    supports_quote: bool
+    supports_cancel: bool
+    configuration_schema: dict[str, Any]
+    prerequisites: tuple[str, ...]
+    status: Literal["available", "blocked", "unavailable"]
+    status_reason: str | None = None
+

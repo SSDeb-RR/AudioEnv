@@ -73,9 +73,11 @@ code contain no optimizer-specific behavior.
 
 ## Persistence and lifecycle
 
-Relational storage contains registries, immutable experiment snapshots, jobs,
-events, metrics, and artifact references. Large payloads use the artifact
-store. State transitions are validated as:
+Relational storage contains projects, registries, immutable experiment hashes
+and preflight snapshots, jobs, events, worker logs, metrics, evaluation
+protocols/samples, paired comparisons, split manifests, external resources,
+and artifact references. Large payloads use the artifact store. State
+transitions are validated as:
 
 ```text
 Draft -> Validating -> Queued -> Running -> Evaluating -> Completed
@@ -86,4 +88,25 @@ Draft -> Validating -> Queued -> Running -> Evaluating -> Completed
 The local provider uses subprocess workers and persisted heartbeats. An
 interrupted non-resumable job becomes failed; a resumable trainer may enqueue a
 new attempt pointing to a checkpoint.
+
+The production entrypoint is `audioenv app --data-dir .audioenv`. It applies
+packaged Alembic migrations, recovers expired worker leases, and serves the
+compiled SPA and API from one loopback process. Local training still runs in a
+separate subprocess and starts only after a persisted preflight and explicit
+launch action.
+
+## Local acceptance policy
+
+Reference V2 exposes an explicit finite action-candidate surface separate from
+its protected verifier/oracle fixtures. `ActionCandidateBuilder` can read only
+that surface and public tool names. The small policy scores candidates using
+WAV features and structural action features, samples a candidate with
+REINFORCE, and executes its individual actions through the normal runtime.
+Training iterates only the train split. Evaluation uses the eight test tasks
+under three frozen acoustic profiles after checkpoint reload.
+
+An evaluation protocol hashes environment, verifier, split manifest, caller,
+audio pipeline, sampling, checkpoint, and seeds. Comparison omits only the
+checkpoint identity when checking compatibility; all other differences reject
+the comparison.
 

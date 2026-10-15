@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any
 
@@ -80,6 +81,28 @@ class Tau2RetailSourceAdapter:
             license="MIT",
             domain="retail",
             tasks=tuple(descriptors),
+        )
+
+    def worker_probe(self, checkout: Path) -> dict[str, Any]:
+        inspection = self.inspect(checkout)
+        uv = shutil.which("uv")
+        return {
+            **inspection,
+            "uv_available": uv is not None,
+            "python_requirement": ">=3.12,<3.14",
+            "protocol": "audioenv.tau2-worker/v1",
+            "executable": bool(inspection["supported"] and uv),
+        }
+
+    @staticmethod
+    def worker_command(checkout: Path) -> tuple[str, ...]:
+        uv = shutil.which("uv")
+        if uv is None:
+            raise RuntimeError("uv is required for the isolated τ² worker")
+        worker = Path(__file__).resolve().parents[1] / "integrations" / "tau2_worker.py"
+        return (
+            uv, "run", "--project", str(checkout.resolve()), "--python", "3.12",
+            "python", str(worker),
         )
 
     @staticmethod

@@ -46,21 +46,21 @@ reported as a preview, not AudioEnv V1 complete.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| V0 and V1 Python suite | PASS | 41 tests passed with platform, training, EnvHarness, and Qwen extras installed |
-| Built-in environment validation | PASS | 18 checks passed, including audio-profile and wrong-order checks |
-| Python package build | PASS | `audioenv_foundry-0.2.0` wheel and sdist built |
+| V0 and V1 Python suite | PASS | 46 tests passed, including the API-to-worker product acceptance flow |
+| Built-in environment validation | PASS | 341 checks passed across all 48 tasks; 0 failed |
+| Python package build | PASS | `audioenv_foundry-0.3.0` wheel and sdist built; wheel inventory includes SPA, migrations, and model adapters |
 | Dashboard dependency audit | PASS | `npm audit` reported zero vulnerabilities |
 | Dashboard production build | PASS | TypeScript and Vite build completed |
-| One-command local startup | PASS | `audioenv dev` served API health and the Vite application on loopback; job workers launch only after explicit run confirmation |
-| Dashboard visual navigation | PASS, MANUAL | Overview, Models, Environments, Training Runs, and persisted metric detail were inspected in the local browser; automated Playwright coverage remains open |
-| Persisted local workflow | PASS | 40-step subprocess run completed with 82 persisted metrics, checkpoint artifact, and evaluation record |
+| One-command local startup | PASS | `audioenv app --data-dir ...` applied migrations and served bundled SPA plus API from an isolated wheel install without Node |
+| Dashboard product flow | PASS | Playwright created a project, selected resources, preflighted, launched, waited for completion, reloaded the checkpoint, viewed the comparison, and exposed export downloads |
+| Persisted local workflow | PASS | 30-step subprocess run completed with 92 persisted metrics, checkpoint/manifest artifacts, two evaluations, and one paired comparison |
 | CPU parameter update | PASS | Initial and final parameter hashes differ; checkpoint reload reproduces the trained result |
-| CPU fixture comparison | PASS, LIMITED | Baseline `0.0`, trained `1.0`; mechanics-only two-task fixture, not product learning evidence |
+| Local held-out comparison | PASS, LIMITED | Baseline `0.0`, trained `1.0` over 24 samples from the immutable test split; audio-conditioned platform proof, not a Qwen result |
 | Official EnvHarness type integration | PASS | Exact bridge test passed against pinned upstream commit |
 | Qwen3-Omni dependency probe | PASS | Dependencies import; probe correctly blocks on missing CUDA and local checkpoint without downloading |
 | Real Qwen native-audio episode | BLOCKED | No CUDA device or checkpoint on the audit host |
 | VeRL-Omni GSPO update | BLOCKED | Requires separately approved multi-GPU worker |
 | Independent caller transfer | NOT RUN | Depends on the real native-audio training run |
-| Ten-point product learning lift | NOT RUN | CPU fixture result is explicitly ineligible |
+| Ten-point native-model learning lift | NOT RUN | Local proof exceeds the threshold but is explicitly ineligible as native Qwen evidence |
 | OCI coding sandbox | BLOCKED | No Docker-compatible runtime is installed |
 

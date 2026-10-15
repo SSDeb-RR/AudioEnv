@@ -1,169 +1,114 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as Tooltip from "@radix-ui/react-tooltip";
 import {
-  Activity, Archive, Boxes, BrainCircuit, CircleGauge, ClipboardCheck,
-  Database, FlaskConical, Settings, TriangleAlert,
+  Activity, Archive, Boxes, BrainCircuit, CheckCircle2, CircleGauge,
+  ClipboardCheck, Database, FlaskConical, FolderKanban, Settings, TriangleAlert,
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useState } from "react";
 
-type Experiment = {
-  id: string; name: string; status: string; created_at: string; failure_reason: string | null;
-};
-type Overview = {
-  total_experiments: number; active_runs: number; failed_runs: number;
-  recent: Experiment[]; compute_cost_usd: number | null; compute_cost_status: string;
-};
-type Metric = { id: number; step: number; name: string; value: number; source: string };
-type Evaluation = { id: string; experiment_id: string; checkpoint_id: string; split: string; metrics: Record<string, number | string> };
-type ModelRecord = { id: string; display_name: string; adapter_type: string; role: string; available: boolean; probe: { reasons?: string[] } | null };
-type EnvironmentRecord = { id: string; version: string; content_hash: string; source_kind: string; authoring_status: string };
+type Experiment = { id:string; name:string; status:string; project_id:string; created_at:string; failure_reason:string|null; config_hash:string|null; preflight:Preflight|null };
+type Project = { id:string; name:string; description:string; created_at:string };
+type ModelRecord = { id:string; display_name:string; adapter_type:string; role:string; available:boolean; probe?:{reasons?:string[]} };
+type EnvironmentRecord = { id:string; version:string; content_hash:string; source_kind:string; authoring_status:string; package?:Record<string, unknown>; validation?:{passed:boolean;checks:unknown[]} };
+type Trainer = { id:string; display_name:string; status:string; status_reason:string; capabilities:Record<string, unknown> };
+type Provider = { id:string; display_name:string; status:string; status_reason?:string; estimated_cost_usd:number|null };
+type Preflight = { available:boolean; reasons:string[]; hardware:{device_type:string;device_count:number}; cost:{status:string;estimated_usd:number|null;basis:string} };
+type Metric = { id:number; step:number; name:string; value:number; source:string };
+type Log = { id:number; level:string; message:string; payload:Record<string,unknown>; created_at:string };
+type Artifact = { id:string; experiment_id:string; kind:string; media_type:string; size_bytes:number; download_url:string; metadata:Record<string,unknown> };
+type Evaluation = { id:string; experiment_id:string; checkpoint_id:string; protocol_hash:string; split:string; metrics:{success_rate:number;success_ci_low:number;success_ci_high:number;kind:string;checkpoint_reload_verified?:boolean} };
+type Comparison = { id:string; experiment_id:string; baseline_evaluation_id:string; trained_evaluation_id:string; result:{compatible:boolean;paired_sample_count:number;baseline_success_rate:number;trained_success_rate:number;paired_delta:number;paired_ci_low:number;paired_ci_high:number} };
+type Overview = { total_experiments:number; active_runs:number; failed_runs:number; recent:Experiment[]; compute_cost_usd:number|null };
 
 const nav = [
-  ["/", "Overview", CircleGauge], ["/models", "Models", BrainCircuit],
-  ["/benchmarks", "Benchmarks & Tasks", Database], ["/environments", "Environments", Boxes],
-  ["/runs", "Training Runs", Activity], ["/evaluations", "Evaluations", ClipboardCheck],
-  ["/artifacts", "Artifacts", Archive], ["/settings", "Settings", Settings],
+  ["/", "Overview", CircleGauge], ["/projects", "Projects", FolderKanban],
+  ["/models", "Models", BrainCircuit], ["/benchmarks", "Benchmarks & Tasks", Database],
+  ["/environments", "Environments", Boxes], ["/runs", "Training Runs", Activity],
+  ["/evaluations", "Evaluations", ClipboardCheck], ["/artifacts", "Artifacts", Archive],
+  ["/settings", "Settings", Settings],
 ] as const;
 
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.json();
+async function getJson<T>(url:string):Promise<T>{ const r=await fetch(url); if(!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); }
+async function postJson<T>(url:string,body:unknown):Promise<T>{ const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); }
+const pct=(value:number|undefined)=>value==null?"—":`${Math.round(value*100)}%`;
+
+function Shell({children}:{children:React.ReactNode}) { return <div className="shell"><aside><div className="brand"><span className="mark"><FlaskConical size={18}/></span><div>AudioEnv<small>Training foundry</small></div></div><nav>{nav.map(([to,label,Icon])=><NavLink key={to} to={to} end={to==="/"}><Icon size={17}/>{label}</NavLink>)}</nav><div className="runtime"><span className="dot"/>Local control plane<small>Truthful capability gates</small></div></aside><main>{children}</main></div>; }
+function Header({eyebrow,title,description}:{eyebrow:string;title:string;description:string}) { return <header><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="description">{description}</p></div><span className="preview">V1 local acceptance</span></header>; }
+function Empty({title,body}:{title:string;body:string}) { return <div className="empty"><FlaskConical size={22}/><strong>{title}</strong><p>{body}</p></div>; }
+function ErrorState({message}:{message:string}) { return <div className="empty error"><TriangleAlert/><strong>Backend unavailable</strong><p>{message}</p></div>; }
+function Status({value}:{value:string}) { return <i className={`status ${["available","completed","running","evaluating","validated"].includes(value)?"running":""}`}>{value.replaceAll("_"," ")}</i>; }
+
+function OverviewPage(){
+  const overview=useQuery({queryKey:["overview"],queryFn:()=>getJson<Overview>("/api/overview"),refetchInterval:2000});
+  const comparisons=useQuery({queryKey:["comparisons"],queryFn:()=>getJson<Comparison[]>("/api/comparisons")});
+  if(overview.isError)return <ErrorState message={(overview.error as Error).message}/>;
+  const latest=comparisons.data?.[0]?.result;
+  return <><Header eyebrow="Workspace" title="Training overview" description="Persisted experiments, rewards, checkpoints, and held-out results."/><section className="stats"><Stat label="Experiments" value={overview.data?.total_experiments??"—"}/><Stat label="Active runs" value={overview.data?.active_runs??"—"} accent/><Stat label="Needs attention" value={overview.data?.failed_runs??"—"}/><Stat label="Compute cost" value={overview.data?.compute_cost_usd==null?"Unavailable":`$${overview.data.compute_cost_usd.toFixed(2)}`}/></section><section className="split"><div className="panel"><h2>Latest held-out comparison</h2>{latest?<ComparisonView comparison={latest}/>:<Empty title="No completed comparison" body="Launch the local acceptance run to produce paired baseline and trained results."/>}</div><div className="panel"><h2>Acceptance tiers</h2><StatusRow label="Local web + training" status="Available"/><StatusRow label="24-sample held-out protocol" status="Available"/><StatusRow label="Qwen3-Omni GPU gate" status="Blocked · paid run not approved"/></div></section><section className="panel"><div className="panel-head"><div><h2>Recent training activity</h2><p>Every row comes from the experiment database.</p></div><Link to="/runs">Open runs</Link></div>{overview.data?.recent.length?<RunTable runs={overview.data.recent}/>:<Empty title="No experiments" body="Create a project, then launch a run."/>}</section></>;
 }
 
-async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-  return response.json();
+function ProjectsPage(){
+  const client=useQueryClient(); const query=useQuery({queryKey:["projects"],queryFn:()=>getJson<Project[]>("/api/projects")});
+  const [name,setName]=useState(""); const [description,setDescription]=useState("");
+  const create=useMutation({mutationFn:()=>postJson("/api/projects",{name,description}),onSuccess:()=>{setName("");setDescription("");client.invalidateQueries({queryKey:["projects"]});}});
+  return <><Header eyebrow="Workspace" title="Projects" description="Own models, environments, runs, evaluations, and artifacts together."/><section className="panel inline-form"><label>Name<input value={name} onChange={e=>setName(e.target.value)} placeholder="Speech agent lab"/></label><label>Description<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Optional context"/></label><button disabled={!name||create.isPending} onClick={()=>create.mutate()}>Create project</button></section><section className="panel grid-list">{query.data?.map(p=><div key={p.id}><FolderKanban/><span><b>{p.name}</b><small>{p.description||"No description"}</small></span><code>{p.id.slice(0,12)}</code></div>)}</section></>;
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return <div className="shell">
-    <aside>
-      <div className="brand"><span className="mark"><FlaskConical size={18} /></span><div>AudioEnv<small>Training foundry</small></div></div>
-      <nav>{nav.map(([to, label, Icon]) => <NavLink key={to} to={to} end={to === "/"}><Icon size={17} />{label}</NavLink>)}</nav>
-      <div className="runtime"><span className="dot" />Local runtime<small>Single-user preview</small></div>
-    </aside>
-    <main>{children}</main>
-  </div>;
+function RunsPage(){ const runs=useQuery({queryKey:["runs"],queryFn:()=>getJson<Experiment[]>("/api/experiments"),refetchInterval:2000}); const [open,setOpen]=useState(false); return <><Header eyebrow="Execution" title="Training runs" description="Draft, preflight, explicitly launch, train, reload, and evaluate."/><div className="actions"><button onClick={()=>setOpen(!open)}>{open?"Close setup":"New training run"}</button></div>{open&&<NewRun/>}<section className="panel">{runs.data?.length?<RunTable runs={runs.data}/>:<Empty title="No training runs" body="Use the guided workflow to create the first run."/>}</section></>; }
+
+function NewRun(){
+  const client=useQueryClient();
+  const projects=useQuery({queryKey:["projects"],queryFn:()=>getJson<Project[]>("/api/projects")});
+  const envs=useQuery({queryKey:["environments"],queryFn:()=>getJson<EnvironmentRecord[]>("/api/environments")});
+  const models=useQuery({queryKey:["models"],queryFn:()=>getJson<ModelRecord[]>("/api/models")});
+  const trainers=useQuery({queryKey:["trainers"],queryFn:()=>getJson<Trainer[]>("/api/trainers")});
+  const providers=useQuery({queryKey:["providers"],queryFn:()=>getJson<Provider[]>("/api/providers")});
+  const [name,setName]=useState("Reference V2 held-out training"); const [steps,setSteps]=useState(40); const [draft,setDraft]=useState<Experiment|null>(null); const [check,setCheck]=useState<Preflight|null>(null); const [confirmed,setConfirmed]=useState(false);
+  const [chosenProject,setChosenProject]=useState(""); const [chosenEnvironment,setChosenEnvironment]=useState(""); const [chosenAgent,setChosenAgent]=useState(""); const [chosenTrainer,setChosenTrainer]=useState(""); const [chosenProvider,setChosenProvider]=useState("");
+  const projectId=chosenProject||projects.data?.[0]?.id||""; const environmentId=chosenEnvironment||envs.data?.find(e=>e.authoring_status==="validated")?.id||""; const agentId=chosenAgent||models.data?.find(m=>m.available)?.id||""; const trainerId=chosenTrainer||trainers.data?.find(t=>t.status==="available")?.id||""; const providerId=chosenProvider||providers.data?.find(p=>p.status==="available")?.id||"";
+  const validate=useMutation({mutationFn:async()=>{const exp=await postJson<Experiment>("/api/experiments",{name,project_id:projectId,config:{project_id:projectId,environment_id:environmentId,agent_model_id:agentId,caller_model_id:null,trainer_id:trainerId,provider_id:providerId,reward_version:"reference-v2",hyperparameters:{steps,learning_rate:0.08,seed:7,checkpoint_interval:10}}});setDraft(exp);const pre=await postJson<Preflight>(`/api/experiments/${exp.id}/preflight`,{});setCheck(pre);return pre;},onSuccess:()=>client.invalidateQueries({queryKey:["runs"]})});
+  const launch=useMutation({mutationFn:()=>postJson(`/api/experiments/${draft!.id}/launch`,{confirmed,provider:providerId}),onSuccess:()=>{client.invalidateQueries({queryKey:["runs"]});client.invalidateQueries({queryKey:["overview"]});}});
+  return <section className="panel wizard"><div className="wizard-grid"><Step n="1" title="Project"><select aria-label="Project" value={projectId} onChange={e=>setChosenProject(e.target.value)}>{projects.data?.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select><small>Persistent ownership boundary</small></Step><Step n="2" title="Environment"><select aria-label="Environment" value={environmentId} onChange={e=>setChosenEnvironment(e.target.value)}>{envs.data?.map(e=><option value={e.id} key={e.id}>{e.id}</option>)}</select><small>Frozen 32 / 8 / 8 split</small></Step><Step n="3" title="Agent & caller"><select aria-label="Agent" value={agentId} onChange={e=>setChosenAgent(e.target.value)}>{models.data?.map(m=><option value={m.id} key={m.id} disabled={!m.available}>{m.display_name}{m.available?"":" · unavailable"}</option>)}</select><small>Scripted caller · local proof</small></Step><Step n="4" title="Trainer"><select aria-label="Trainer" value={trainerId} onChange={e=>setChosenTrainer(e.target.value)}>{trainers.data?.map(t=><option value={t.id} key={t.id} disabled={t.status!=="available"}>{t.display_name} · {t.status}</option>)}</select><small>Actual REINFORCE parameter updates</small></Step><Step n="5" title="Hyperparameters"><label>Steps<input type="number" min="1" value={steps} onChange={e=>setSteps(Number(e.target.value))}/></label><small>LR 0.08 · seed 7 · checkpoint every 10</small></Step><Step n="6" title="Execution"><select aria-label="Provider" value={providerId} onChange={e=>setChosenProvider(e.target.value)}>{providers.data?.map(p=><option value={p.id} key={p.id} disabled={p.status!=="available"}>{p.display_name} · {p.status}</option>)}</select><small>Local CPU · $0 platform estimate</small></Step></div><div className="review"><label>Run name<input value={name} onChange={e=>setName(e.target.value)}/></label><button disabled={!name||!projectId||!environmentId||!agentId||validate.isPending||!!draft} onClick={()=>validate.mutate()}>{validate.isPending?"Validating…":"Run preflight"}</button>{check&&<div className={check.available?"preflight ok":"preflight bad"}><b>{check.available?"Preflight passed":"Preflight blocked"}</b><small>{check.reasons.join(" · ")||`${check.hardware.device_count}× ${check.hardware.device_type} · estimated $${check.cost.estimated_usd?.toFixed(2)}`}</small></div>}{check?.available&&<><label className="confirm"><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>I reviewed the configuration and want to launch this local job.</label><button disabled={!confirmed||launch.isPending} onClick={()=>launch.mutate()}>{launch.isPending?"Launching…":"Launch experiment"}</button></>}{(validate.isError||launch.isError)&&<small className="form-error">{String((validate.error||launch.error) as Error)}</small>}</div></section>;
 }
 
-function Header({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
-  return <header><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="description">{description}</p></div><span className="preview">V1 preview</span></header>;
+function RunPage(){
+  const {id=""}=useParams(); const run=useQuery({queryKey:["run",id],queryFn:()=>getJson<Experiment>(`/api/experiments/${id}`),refetchInterval:1000});
+  const metrics=useQuery({queryKey:["metrics",id],queryFn:()=>getJson<Metric[]>(`/api/experiments/${id}/metrics`),refetchInterval:1000});
+  const logs=useQuery({queryKey:["logs",id],queryFn:()=>getJson<Log[]>(`/api/experiments/${id}/logs`),refetchInterval:1000});
+  const artifacts=useQuery({queryKey:["artifacts"],queryFn:()=>getJson<Artifact[]>("/api/artifacts"),refetchInterval:1500});
+  const evaluations=useQuery({queryKey:["evaluations"],queryFn:()=>getJson<Evaluation[]>("/api/evaluations"),refetchInterval:1500});
+  const comparisons=useQuery({queryKey:["comparisons",id],queryFn:()=>getJson<Comparison[]>(`/api/comparisons?experiment_id=${id}`),refetchInterval:1500});
+  const client=useQueryClient(); const exportRun=useMutation({mutationFn:()=>postJson<Artifact>(`/api/experiments/${id}/export`,{}),onSuccess:()=>client.invalidateQueries({queryKey:["artifacts"]})});
+  const loss=metrics.data?.filter(m=>m.name==="loss")??[]; const ownArtifacts=artifacts.data?.filter(a=>a.experiment_id===id)??[]; const ownEvals=evaluations.data?.filter(e=>e.experiment_id===id)??[];
+  const verify=useMutation({mutationFn:(artifactId:string)=>postJson<{verified:boolean;step:number}>(`/api/experiments/${id}/checkpoints/${artifactId}/verify`,{})});
+  return <><Header eyebrow="Training run" title={run.data?.name??"Loading…"} description={`Status: ${run.data?.status??"unknown"} · config ${run.data?.config_hash?.slice(0,12)??"—"}`}/>{run.data?.failure_reason&&<div className="alert"><TriangleAlert/> {run.data.failure_reason}</div>}<section className="stats"><Stat label="Status" value={run.data?.status??"—"}/><Stat label="Reported steps" value={loss.at(-1)?.step??0}/><Stat label="Baseline" value={pct(ownEvals.find(e=>e.metrics.kind==="baseline")?.metrics.success_rate)}/><Stat label="Trained" value={pct(ownEvals.find(e=>e.metrics.kind==="trained")?.metrics.success_rate)} accent/></section><section className="panel chart"><h2>Persisted training loss</h2>{loss.length?<ResponsiveContainer width="100%" height={275}><LineChart data={loss}><CartesianGrid stroke="#252b34"/><XAxis dataKey="step" stroke="#77808f"/><YAxis stroke="#77808f"/><Tooltip/><Line type="monotone" dataKey="value" stroke="#77d9bd" dot={false}/></LineChart></ResponsiveContainer>:<Empty title="Loss unavailable" body="The worker has not reported a loss value."/>}</section>{comparisons.data?.[0]&&<section className="panel"><div className="panel-head"><h2>Paired held-out comparison</h2><button onClick={()=>exportRun.mutate()} disabled={exportRun.isPending}>{exportRun.isPending?"Exporting…":"Export reproducibility bundle"}</button></div><ComparisonView comparison={comparisons.data[0].result}/>{exportRun.data&&<a href={exportRun.data.download_url}>Download experiment export</a>}</section>}<section className="split"><div className="panel"><h2>Worker logs</h2><div className="log-list">{logs.data?.map(l=><div key={l.id}><time>{new Date(l.created_at).toLocaleTimeString()}</time><Status value={l.level}/><span>{l.message}</span></div>)}</div></div><div className="panel"><h2>Checkpoints & artifacts</h2><div className="artifact-list">{ownArtifacts.map(a=><div key={a.id}><span><b>{a.kind}</b><small>{a.id.slice(0,14)} · {(a.size_bytes/1024).toFixed(1)} KB</small></span><a href={a.download_url}>Download</a>{a.kind==="checkpoint"&&<button onClick={()=>verify.mutate(a.id)}>Reload verify</button>}</div>)}{verify.data&&<p className="success"><CheckCircle2 size={15}/> Reload verified at step {verify.data.step}</p>}</div></div></section></>;
 }
 
-function OverviewPage() {
-  const query = useQuery({ queryKey: ["overview"], queryFn: () => getJson<Overview>("/api/overview") });
-  const evaluations = useQuery({ queryKey: ["evaluations"], queryFn: () => getJson<Evaluation[]>("/api/evaluations") });
-  if (query.isError) return <ErrorState message={(query.error as Error).message} />;
-  const data = query.data;
-  return <><Header eyebrow="Workspace" title="Training overview" description="Actual experiment state from the local AudioEnv service." />
-    <section className="stats">
-      <Stat label="Experiments" value={data?.total_experiments ?? "—"} />
-      <Stat label="Active runs" value={data?.active_runs ?? "—"} accent />
-      <Stat label="Needs attention" value={data?.failed_runs ?? "—"} warning={(data?.failed_runs ?? 0) > 0} />
-      <Tooltip.Provider><Tooltip.Root><Tooltip.Trigger asChild><div><Stat label="Compute cost" value={data?.compute_cost_usd == null ? "Unavailable" : `$${data.compute_cost_usd.toFixed(2)}`} /></div></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="tip">No provider price has been configured.</Tooltip.Content></Tooltip.Portal></Tooltip.Root></Tooltip.Provider>
-    </section>
-    <section className="panel"><div className="panel-head"><div><h2>Recent activity</h2><p>Runs are never synthesized by the dashboard.</p></div><Link to="/runs">View all</Link></div>
-      {!data?.recent.length ? <Empty title="No experiments yet" body="Create an experiment through the API or run the CPU training demo." /> : <RunTable runs={data.recent} />}
-    </section>
-    <section className="split"><div className="panel"><h2>Learning lift</h2>{evaluations.data?.length ? <Comparison evaluation={evaluations.data[0]} /> : <Empty title="No comparison available" body="Baseline and trained evaluations are required before a lift is shown." />}</div><div className="panel"><h2>System status</h2><StatusRow label="Local API" status="Available" /><StatusRow label="CUDA worker" status="Not configured" /><StatusRow label="Cost telemetry" status="Unavailable" /></div></section>
-  </>;
+function ModelsPage(){ const client=useQueryClient();const query=useQuery({queryKey:["models"],queryFn:()=>getJson<ModelRecord[]>("/api/models")});const [id,setId]=useState("Qwen/Qwen3-Omni-30B-A3B-Instruct");const register=useMutation({mutationFn:()=>postJson("/api/models",{id,display_name:id.split("/").pop(),adapter_type:"qwen3-omni",role:"agent",config:{checkpoint:id}}),onSuccess:()=>client.invalidateQueries({queryKey:["models"]})});const probe=useMutation({mutationFn:(model_id:string)=>postJson("/api/models/probe",{model_id}),onSuccess:()=>client.invalidateQueries({queryKey:["models"]})});return <><Header eyebrow="Registry" title="Models" description="Identifiers remain unavailable until the adapter and local resources pass a probe."/><section className="panel inline-form"><label>Model or checkpoint<input value={id} onChange={e=>setId(e.target.value)}/></label><button onClick={()=>register.mutate()}>Register, not load</button></section><section className="panel grid-list">{query.data?.map(m=><div key={m.id}><BrainCircuit/><span><b>{m.display_name}</b><small>{m.id} · {m.role}</small></span><Status value={m.available?"available":"not verified"}/><button onClick={()=>probe.mutate(m.id)}>Probe</button></div>)}</section></>;
 }
 
-function RunsPage() {
-  const query = useQuery({ queryKey: ["runs"], queryFn: () => getJson<Experiment[]>("/api/experiments") });
-  const [creating, setCreating] = useState(false);
-  return <><Header eyebrow="Execution" title="Training runs" description="Validation, rollout, training, and evaluation lifecycle." /><div className="actions"><button onClick={() => setCreating(!creating)}>{creating ? "Close setup" : "New local run"}</button></div>{creating && <NewRun onDone={() => setCreating(false)} />}<section className="panel">{query.data?.length ? <RunTable runs={query.data} /> : <Empty title="No training runs" body="Launch requires a validated environment, model probe, trainer, and explicit review." />}</section></>;
+function EnvironmentsPage(){ const query=useQuery({queryKey:["environments"],queryFn:()=>getJson<EnvironmentRecord[]>("/api/environments")});const [selected,setSelected]=useState<string|null>(null);const detail=useQuery({queryKey:["environment",selected],queryFn:()=>getJson<EnvironmentRecord>(`/api/environments/${selected}`),enabled:!!selected});return <><Header eyebrow="Construction" title="Environments" description="Validated, versioned task worlds with protected verification."/><section className="mode-grid"><Mode title="Reference V2" body="48 tasks · immutable train/dev/test membership" status="Working"/><Mode title="τ² retail" body="Pinned metadata adapter; isolated executable worker remains partial" status="Partial"/><Mode title="Repository" body="Unavailable until an OCI sandbox passes adversarial tests" status="Unsupported"/></section><section className="panel grid-list">{query.data?.map(e=><button className="row-button" key={e.id} onClick={()=>setSelected(e.id)}><Boxes/><span><b>{e.id}</b><small>{e.content_hash.slice(0,16)} · {e.source_kind}</small></span><Status value={e.authoring_status}/></button>)}</section>{detail.data&&<section className="panel"><h2>Validation report</h2><pre>{JSON.stringify(detail.data.validation,null,2)}</pre></section>}</>;
 }
 
-function NewRun({ onDone }: { onDone: () => void }) {
-  const client = useQueryClient();
-  const [name, setName] = useState("Local CPU training proof");
-  const [steps, setSteps] = useState(40);
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const experiment = await postJson<Experiment>("/api/experiments", { name, config: { environment_id: "audioenv/reference-agentic", trainer_id: "audioenv/tiny-reinforce", trainer_config: { steps } } });
-      return postJson(`/api/experiments/${experiment.id}/launch`, { confirmed: true, provider: "local-subprocess" });
-    },
-    onSuccess: () => { client.invalidateQueries({ queryKey: ["runs"] }); client.invalidateQueries({ queryKey: ["overview"] }); onDone(); },
-  });
-  return <section className="panel setup"><div><span>1 · Environment</span><b>Reference agentic fixture</b><small>Validated local package</small></div><div><span>2 · Agent & caller</span><b>Tiny audio policy · scripted caller</b><small>Mechanics proof only</small></div><div><span>3 · Trainer</span><b>REINFORCE · Torch CPU</b><label>Steps<input type="number" min="1" max="1000" value={steps} onChange={event => setSteps(Number(event.target.value))} /></label></div><div><span>4 · Review & launch</span><input aria-label="Run name" value={name} onChange={event => setName(event.target.value)} /><small>Hardware: local CPU · Estimated cost: unavailable</small><button disabled={mutation.isPending || !name || steps < 1} onClick={() => mutation.mutate()}>{mutation.isPending ? "Launching…" : "Validate & launch"}</button>{mutation.isError && <small className="form-error">{(mutation.error as Error).message}</small>}</div></section>;
+function BenchmarksPage(){ const envs=useQuery({queryKey:["environments"],queryFn:()=>getJson<EnvironmentRecord[]>("/api/environments")});return <><Header eyebrow="Task sources" title="Benchmarks & tasks" description="Frozen source revisions, task counts, and split manifests."/><section className="panel"><div className="benchmark"><Database/><div><b>Reference V2 acceptance corpus</b><p>32 train · 8 validation · 8 test. Entity values, task IDs, and evaluation seeds are disjoint.</p></div><Status value="available"/></div><div className="benchmark"><Database/><div><b>τ² retail v1.0.1</b><p>Pinned at fc0055dc…; executable Python 3.12 JSONL parity gate is not yet complete.</p></div><Status value="partial"/></div><small>{envs.data?.length??0} registered environment versions</small></section></>;
 }
 
-function RunPage() {
-  const { id = "" } = useParams();
-  const run = useQuery({ queryKey: ["run", id], queryFn: () => getJson<Experiment>(`/api/experiments/${id}`) });
-  const metrics = useQuery({ queryKey: ["metrics", id], queryFn: () => getJson<Metric[]>(`/api/experiments/${id}/metrics`) });
-  const points = metrics.data?.filter(item => item.name === "loss") ?? [];
-  return <><Header eyebrow="Training run" title={run.data?.name ?? "Loading…"} description={`Status: ${run.data?.status ?? "unknown"}`} /><section className="panel chart"><h2>Reported loss</h2>{points.length ? <ResponsiveContainer width="100%" height={280}><LineChart data={points}><CartesianGrid stroke="#252b34" /><XAxis dataKey="step" stroke="#77808f" /><YAxis stroke="#77808f" /><ChartTooltip /><Line type="monotone" dataKey="value" stroke="#77d9bd" dot={false} /></LineChart></ResponsiveContainer> : <Empty title="Loss unavailable" body="This trainer has not reported loss metrics." />}</section></>;
+function EvaluationsPage(){ const evals=useQuery({queryKey:["evaluations"],queryFn:()=>getJson<Evaluation[]>("/api/evaluations")});const comps=useQuery({queryKey:["comparisons"],queryFn:()=>getJson<Comparison[]>("/api/comparisons")});return <><Header eyebrow="Held-out evidence" title="Evaluations" description="Only protocol-compatible baseline and trained results can be compared."/>{comps.data?.map(c=><section className="panel" key={c.id}><div className="panel-head"><h2>Comparison {c.id.slice(0,8)}</h2><Status value={c.result.compatible?"compatible":"blocked"}/></div><ComparisonView comparison={c.result}/></section>)}<section className="panel table"><div className="tr heading"><span>Evaluation</span><span>Kind</span><span>Success</span></div>{evals.data?.map(e=><div className="tr" key={e.id}><span><b>{e.id.slice(0,8)}</b><small>{e.protocol_hash?.slice(0,12)}</small></span><span>{e.metrics.kind}</span><span>{pct(e.metrics.success_rate)}</span></div>)}</section></>;
 }
 
-function ResourcePage({ title, endpoint, description }: { title: string; endpoint: string; description: string }) {
-  const query = useQuery({ queryKey: [endpoint], queryFn: () => getJson<unknown[]>(endpoint) });
-  return <><Header eyebrow="Registry" title={title} description={description} /><section className="panel">{query.data?.length ? <pre>{JSON.stringify(query.data, null, 2)}</pre> : <Empty title={`No ${title.toLowerCase()}`} body="Nothing has been registered through the backend yet." />}</section></>;
+function ArtifactsPage(){ const query=useQuery({queryKey:["artifacts"],queryFn:()=>getJson<Artifact[]>("/api/artifacts")});return <><Header eyebrow="Reproducibility" title="Artifacts" description="Downloads are resolved by content-addressed artifact ID, never arbitrary paths."/><section className="panel artifact-list">{query.data?.map(a=><div key={a.id}><span><b>{a.kind}</b><small>{a.id} · {a.media_type} · {a.size_bytes} bytes</small></span><a href={a.download_url}>Download</a></div>)}</section></>;
 }
 
-function ModelsPage() {
-  const client = useQueryClient();
-  const query = useQuery({ queryKey: ["models"], queryFn: () => getJson<ModelRecord[]>("/api/models") });
-  const [modelId, setModelId] = useState("Qwen/Qwen3-Omni-30B-A3B-Instruct");
-  const [role, setRole] = useState("agent");
-  const register = useMutation({
-    mutationFn: () => postJson("/api/models", { id: modelId, display_name: modelId.split("/").pop(), adapter_type: "qwen3-omni", role, config: { checkpoint: modelId } }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["models"] }),
-  });
-  const probe = useMutation({
-    mutationFn: (id: string) => postJson("/api/models/probe", { model_id: id }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["models"] }),
-  });
-  return <><Header eyebrow="Registry" title="Models" description="Register identifiers, then probe the actual adapter and hardware before use." /><section className="panel model-form"><label>Model or local checkpoint<input value={modelId} onChange={event => setModelId(event.target.value)} /></label><label>Role<select value={role} onChange={event => setRole(event.target.value)}><option value="agent">Trainable agent</option><option value="caller">Frozen caller</option><option value="both">Both</option></select></label><button disabled={!modelId || register.isPending} onClick={() => register.mutate()}>Register, not load</button></section><section className="panel">{query.data?.length ? <div className="model-list">{query.data.map(model => <div key={model.id}><span><b>{model.display_name}</b><small>{model.id} · {model.role}</small></span><i className={`status ${model.available ? "running" : ""}`}>{model.available ? "Available" : "Not verified"}</i><button onClick={() => probe.mutate(model.id)}>Probe</button>{model.probe?.reasons?.length ? <small>{model.probe.reasons.join(" · ")}</small> : null}</div>)}</div> : <Empty title="No models" body="Entering an identifier does not make a checkpoint available. Register and probe it here." />}</section></>;
+function SettingsPage(){ const trainers=useQuery({queryKey:["trainers"],queryFn:()=>getJson<Trainer[]>("/api/trainers")});const providers=useQuery({queryKey:["providers"],queryFn:()=>getJson<Provider[]>("/api/providers")});return <><Header eyebrow="Capabilities" title="Settings" description="Unavailable integrations remain explicit rather than simulated."/><section className="split"><div className="panel"><h2>Trainers</h2>{trainers.data?.map(t=><StatusRow key={t.id} label={t.display_name} status={`${t.status} · ${t.status_reason}`}/>)}</div><div className="panel"><h2>Execution providers</h2>{providers.data?.map(p=><StatusRow key={p.id} label={p.display_name} status={`${p.status}${p.status_reason?` · ${p.status_reason}`:""}`}/>)}</div></section></>;
 }
 
-function EnvironmentsPage() {
-  const client = useQueryClient();
-  const query = useQuery({ queryKey: ["environments"], queryFn: () => getJson<EnvironmentRecord[]>("/api/environments") });
-  const [open, setOpen] = useState(false);
-  const [environmentId, setEnvironmentId] = useState("custom/workflow");
-  const [taskId, setTaskId] = useState("workflow-1");
-  const [goal, setGoal] = useState("Complete the workflow");
-  const create = useMutation({
-    mutationFn: () => postJson("/api/environments/custom", {
-      environment_id: environmentId, description: goal, task_id: taskId, goal,
-      initial_state: { task: { status: "pending" } }, expected_state: { task: { status: "complete" } },
-      initial_utterance: goal, tools: [{ name: "complete_task", description: "Complete the workflow", operation: "set_path", path: ["task", "status"], required_arguments: ["status"], value_argument: "status" }],
-      required_tools: [{ name: "complete_task", arguments: { status: "complete" }, milestone: "workflow_complete" }],
-      required_communications: ["complete"],
-    }),
-    onSuccess: () => { client.invalidateQueries({ queryKey: ["environments"] }); setOpen(false); },
-  });
-  return <><Header eyebrow="Construction" title="Environments" description="Import, author, validate, and version executable task worlds." /><section className="mode-grid"><div className="mode"><b>Existing benchmark</b><p>τ² retail source importer is available; executable worker integration remains gated.</p><span>Partial</span></div><div className="mode active"><b>Custom task</b><p>Create a constrained state-transition environment and run its verifier suite.</p><button onClick={() => setOpen(!open)}>{open ? "Close" : "Create"}</button></div><div className="mode"><b>Repository task</b><p>Disabled until an OCI sandbox passes the security capability check.</p><span>Unsupported</span></div></section>{open && <section className="panel environment-form"><label>Environment ID<input value={environmentId} onChange={event => setEnvironmentId(event.target.value)} /></label><label>Task ID<input value={taskId} onChange={event => setTaskId(event.target.value)} /></label><label>Goal<input value={goal} onChange={event => setGoal(event.target.value)} /></label><button disabled={create.isPending || !environmentId || !taskId || !goal} onClick={() => create.mutate()}>{create.isPending ? "Validating…" : "Create & validate"}</button>{create.isError && <small className="form-error">{(create.error as Error).message}</small>}</section>}<section className="panel">{query.data?.length ? <div className="model-list">{query.data.map(item => <div key={item.id}><span><b>{item.id}</b><small>{item.content_hash.slice(0, 14)} · {item.source_kind}</small></span><i className="status running">{item.authoring_status}</i></div>)}</div> : <Empty title="No environments" body="Create a custom package or import a supported benchmark source." />}</section></>;
-}
+function App(){return <Shell><Routes><Route path="/" element={<OverviewPage/>}/><Route path="/projects" element={<ProjectsPage/>}/><Route path="/models" element={<ModelsPage/>}/><Route path="/benchmarks" element={<BenchmarksPage/>}/><Route path="/environments" element={<EnvironmentsPage/>}/><Route path="/runs" element={<RunsPage/>}/><Route path="/runs/:id" element={<RunPage/>}/><Route path="/evaluations" element={<EvaluationsPage/>}/><Route path="/artifacts" element={<ArtifactsPage/>}/><Route path="/settings" element={<SettingsPage/>}/></Routes></Shell>}
 
-function App() {
-  return <Shell><Routes>
-    <Route path="/" element={<OverviewPage />} />
-    <Route path="/models" element={<ModelsPage />} />
-    <Route path="/benchmarks" element={<ResourcePage title="Benchmarks & tasks" endpoint="/api/environments" description="Imported sources and immutable task splits." />} />
-    <Route path="/environments" element={<EnvironmentsPage />} />
-    <Route path="/runs" element={<RunsPage />} /><Route path="/runs/:id" element={<RunPage />} />
-    <Route path="/evaluations" element={<ResourcePage title="Evaluations" endpoint="/api/evaluations" description="Traceable baseline and checkpoint comparisons." />} />
-    <Route path="/artifacts" element={<ResourcePage title="Artifacts" endpoint="/api/artifacts" description="Checkpoints, traces, audio, logs, and reproducibility exports." />} />
-    <Route path="/settings" element={<><Header eyebrow="Workspace" title="Settings" description="Local execution and storage configuration." /><section className="panel"><StatusRow label="Deployment" status="Local, single user" /><StatusRow label="Authentication" status="Not configured" /><StatusRow label="Artifact storage" status="Local filesystem" /></section></>} />
-  </Routes></Shell>;
-}
-
-function Stat({ label, value, accent, warning }: { label: string; value: string | number; accent?: boolean; warning?: boolean }) { return <div className={`stat ${accent ? "accent" : ""} ${warning ? "warning" : ""}`}><span>{label}</span><strong>{value}</strong></div>; }
-function Empty({ title, body }: { title: string; body: string }) { return <div className="empty"><FlaskConical size={22} /><strong>{title}</strong><p>{body}</p></div>; }
-function ErrorState({ message }: { message: string }) { return <div className="empty error"><TriangleAlert /><strong>Backend unavailable</strong><p>{message}</p></div>; }
-function StatusRow({ label, status }: { label: string; status: string }) { return <div className="status-row"><span>{label}</span><b>{status}</b></div>; }
-function RunTable({ runs }: { runs: Experiment[] }) { return <div className="table"><div className="tr heading"><span>Run</span><span>Status</span><span>Created</span></div>{runs.map(run => <Link className="tr" key={run.id} to={`/runs/${run.id}`}><span><b>{run.name}</b><small>{run.id.slice(0, 8)}</small></span><span><i className={`status ${run.status}`}>{run.status}</i></span><span>{new Date(run.created_at).toLocaleString()}</span></Link>)}</div>; }
-function Comparison({ evaluation }: { evaluation: Evaluation }) {
-  const baseline = Number(evaluation.metrics.baseline_success_rate ?? 0);
-  const trained = Number(evaluation.metrics.trained_success_rate ?? 0);
-  return <div className="comparison"><div><span>Baseline</span><b>{Math.round(baseline * 100)}%</b><i><em style={{ width: `${baseline * 100}%` }} /></i></div><div><span>Trained</span><b>{Math.round(trained * 100)}%</b><i><em style={{ width: `${trained * 100}%` }} /></i></div><small>{evaluation.metrics.claim_scope === "cpu_mechanics_proof" ? "CPU mechanics proof · not a Qwen result" : evaluation.split}</small></div>;
-}
+function Stat({label,value,accent}:{label:string;value:string|number;accent?:boolean}){return <div className={`stat ${accent?"accent":""}`}><span>{label}</span><strong>{value}</strong></div>}
+function StatusRow({label,status}:{label:string;status:string}){return <div className="status-row"><span>{label}</span><b>{status}</b></div>}
+function RunTable({runs}:{runs:Experiment[]}){return <div className="table"><div className="tr heading"><span>Run</span><span>Status</span><span>Created</span></div>{runs.map(r=><Link className="tr" key={r.id} to={`/runs/${r.id}`}><span><b>{r.name}</b><small>{r.id.slice(0,8)}</small></span><span><Status value={r.status}/></span><span>{new Date(r.created_at).toLocaleString()}</span></Link>)}</div>}
+function Step({n,title,children}:{n:string;title:string;children:React.ReactNode}){return <div><span>{n} · {title}</span>{children}</div>}
+function Mode({title,body,status}:{title:string;body:string;status:string}){return <div className="mode"><b>{title}</b><p>{body}</p><Status value={status.toLowerCase()}/></div>}
+function ComparisonView({comparison}:{comparison:Comparison["result"]}){return <div className="comparison"><div><span>Baseline</span><b>{pct(comparison.baseline_success_rate)}</b><i><em style={{width:pct(comparison.baseline_success_rate)}}/></i></div><div><span>Trained</span><b>{pct(comparison.trained_success_rate)}</b><i><em style={{width:pct(comparison.trained_success_rate)}}/></i></div><p><strong>{comparison.paired_delta>=0?"+":""}{pct(comparison.paired_delta)}</strong> paired delta · 95% CI {pct(comparison.paired_ci_low)} to {pct(comparison.paired_ci_high)} · {comparison.paired_sample_count} samples</p></div>}
 
 export default App;

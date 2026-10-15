@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 try:
-    from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
+    from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, inspect, select, text
     from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 except ImportError as exc:  # pragma: no cover - exercised by optional-dependency probe
     raise RuntimeError("Install AudioEnv with the 'platform' extra") from exc
@@ -23,12 +24,21 @@ class Base(DeclarativeBase):
     pass
 
 
+class ProjectRecord(Base):
+    __tablename__ = "projects"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ModelRecord(Base):
     __tablename__ = "models"
     id: Mapped[str] = mapped_column(String, primary_key=True)
     display_name: Mapped[str] = mapped_column(String)
     adapter_type: Mapped[str] = mapped_column(String)
     role: Mapped[str] = mapped_column(String)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     probe_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     available: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -42,6 +52,7 @@ class EnvironmentRecord(Base):
     content_hash: Mapped[str] = mapped_column(String(64), unique=True)
     source_kind: Mapped[str] = mapped_column(String)
     authoring_status: Mapped[str] = mapped_column(String)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     package_json: Mapped[str] = mapped_column(Text)
     validation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -52,7 +63,10 @@ class ExperimentRecord(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     config_json: Mapped[str] = mapped_column(Text)
+    config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    preflight_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment_id: Mapped[str | None] = mapped_column(ForeignKey("environments.id"), nullable=True)
     agent_model_id: Mapped[str | None] = mapped_column(ForeignKey("models.id"), nullable=True)
     caller_model_id: Mapped[str | None] = mapped_column(ForeignKey("models.id"), nullable=True)
@@ -88,6 +102,7 @@ class ArtifactRecord(Base):
     __tablename__ = "artifacts"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     experiment_id: Mapped[str | None] = mapped_column(ForeignKey("experiments.id"), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String)
     media_type: Mapped[str] = mapped_column(String)
     size_bytes: Mapped[int] = mapped_column(Integer)
@@ -100,12 +115,14 @@ class EvaluationRecord(Base):
     __tablename__ = "evaluations"
     id: Mapped[str] = mapped_column(String, primary_key=True)
     experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     checkpoint_id: Mapped[str] = mapped_column(String)
     environment_hash: Mapped[str] = mapped_column(String(64))
     verifier_hash: Mapped[str] = mapped_column(String(64))
     split: Mapped[str] = mapped_column(String)
     config_json: Mapped[str] = mapped_column(Text)
     metrics_json: Mapped[str] = mapped_column(Text)
+    protocol_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -122,6 +139,58 @@ class JobRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class WorkerLogRecord(Base):
+    __tablename__ = "worker_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
+    level: Mapped[str] = mapped_column(String, default="info")
+    message: Mapped[str] = mapped_column(Text)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EvaluationSampleRecord(Base):
+    __tablename__ = "evaluation_samples"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    evaluation_id: Mapped[str] = mapped_column(ForeignKey("evaluations.id"), index=True)
+    task_id: Mapped[str] = mapped_column(String, index=True)
+    audio_profile_id: Mapped[str] = mapped_column(String)
+    seed: Mapped[int] = mapped_column(Integer)
+    passed: Mapped[bool] = mapped_column(Boolean)
+    reward: Mapped[float] = mapped_column(Float)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class ComparisonRecord(Base):
+    __tablename__ = "comparisons"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
+    baseline_evaluation_id: Mapped[str] = mapped_column(ForeignKey("evaluations.id"))
+    trained_evaluation_id: Mapped[str] = mapped_column(ForeignKey("evaluations.id"))
+    compatibility_hash: Mapped[str] = mapped_column(String(64), index=True)
+    result_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SplitManifestRecord(Base):
+    __tablename__ = "split_manifests"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    environment_id: Mapped[str] = mapped_column(String, index=True)
+    manifest_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ExternalComputeResourceRecord(Base):
+    __tablename__ = "external_compute_resources"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(ForeignKey("experiments.id"), index=True)
+    provider: Mapped[str] = mapped_column(String)
+    external_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String)
+    config_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Database:
     def __init__(self, url: str = "sqlite:///./.audioenv/audioenv.db"):
         if url.startswith("sqlite:///"):
@@ -132,6 +201,25 @@ class Database:
 
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)
+        # ``create_all`` does not add columns to databases created by V0.2.
+        # Keep local startup self-healing; Alembic remains the authoritative
+        # production migration record.
+        additions = {
+            "models": {"project_id": "VARCHAR"},
+            "environments": {"project_id": "VARCHAR"},
+            "experiments": {
+                "project_id": "VARCHAR", "config_hash": "VARCHAR(64)", "preflight_json": "TEXT",
+            },
+            "artifacts": {"project_id": "VARCHAR"},
+            "evaluations": {"project_id": "VARCHAR", "protocol_hash": "VARCHAR(64)"},
+        }
+        with self.engine.begin() as connection:
+            schema = inspect(connection)
+            for table, columns in additions.items():
+                existing = {column["name"] for column in schema.get_columns(table)}
+                for name, sql_type in columns.items():
+                    if name not in existing:
+                        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
     def session(self) -> Session:
         return self.sessions()
@@ -157,9 +245,42 @@ class PlatformRepository:
     def __init__(self, database: Database):
         self.database = database
 
-    def create_experiment(self, name: str, config: dict[str, Any]) -> ExperimentRecord:
+    def ensure_default_project(self) -> ProjectRecord:
+        with self.database.session() as session:
+            record = session.get(ProjectRecord, "imported-local-workspace")
+            if record is None:
+                record = ProjectRecord(
+                    id="imported-local-workspace",
+                    name="Imported local workspace",
+                    description="Default project for local and legacy records.",
+                )
+                session.add(record)
+                session.commit()
+            return record
+
+    def create_project(self, name: str, description: str = "") -> ProjectRecord:
+        record = ProjectRecord(id=str(uuid4()), name=name, description=description)
+        with self.database.session() as session:
+            session.add(record)
+            session.commit()
+        return record
+
+    def list_projects(self) -> list[ProjectRecord]:
+        with self.database.session() as session:
+            return list(session.scalars(select(ProjectRecord).order_by(ProjectRecord.created_at)))
+
+    def get_project(self, project_id: str) -> ProjectRecord | None:
+        with self.database.session() as session:
+            return session.get(ProjectRecord, project_id)
+
+    def create_experiment(
+        self, name: str, config: dict[str, Any], *, project_id: str | None = None
+    ) -> ExperimentRecord:
+        project = project_id or self.ensure_default_project().id
+        canonical = _dump(config)
         record = ExperimentRecord(
-            id=str(uuid4()), name=name, status="draft", config_json=_dump(config)
+            id=str(uuid4()), name=name, status="draft", project_id=project,
+            config_json=canonical, config_hash=sha256(canonical.encode()).hexdigest(),
         )
         with self.database.session() as session:
             session.add(record)
@@ -168,13 +289,15 @@ class PlatformRepository:
         return record
 
     def register_model(
-        self, model_id: str, display_name: str, adapter_type: str, role: str, config: dict[str, Any]
+        self, model_id: str, display_name: str, adapter_type: str, role: str, config: dict[str, Any],
+        project_id: str | None = None,
     ) -> ModelRecord:
         record = ModelRecord(
             id=model_id,
             display_name=display_name,
             adapter_type=adapter_type,
             role=role,
+            project_id=project_id or self.ensure_default_project().id,
             config_json=_dump(config),
             available=False,
         )
@@ -186,6 +309,10 @@ class PlatformRepository:
     def list_models(self) -> list[ModelRecord]:
         with self.database.session() as session:
             return list(session.scalars(select(ModelRecord).order_by(ModelRecord.created_at.desc())))
+
+    def get_model(self, model_id: str) -> ModelRecord | None:
+        with self.database.session() as session:
+            return session.get(ModelRecord, model_id)
 
     def set_model_probe(self, model_id: str, probe: dict[str, Any]) -> ModelRecord:
         with self.database.session() as session:
@@ -201,13 +328,19 @@ class PlatformRepository:
         with self.database.session() as session:
             return list(session.scalars(select(EnvironmentRecord).order_by(EnvironmentRecord.created_at.desc())))
 
+    def get_environment(self, environment_id: str) -> EnvironmentRecord | None:
+        with self.database.session() as session:
+            return session.get(EnvironmentRecord, environment_id)
+
     def register_environment(
         self, *, record_id: str, version: str, content_hash: str, source_kind: str,
         authoring_status: str, package: dict[str, Any], validation: dict[str, Any],
+        project_id: str | None = None,
     ) -> EnvironmentRecord:
         record = EnvironmentRecord(
             id=record_id, version=version, content_hash=content_hash, source_kind=source_kind,
             authoring_status=authoring_status, package_json=_dump(package), validation_json=_dump(validation),
+            project_id=project_id or self.ensure_default_project().id,
         )
         with self.database.session() as session:
             session.merge(record)
@@ -218,13 +351,19 @@ class PlatformRepository:
         with self.database.session() as session:
             return list(session.scalars(select(ArtifactRecord).order_by(ArtifactRecord.created_at.desc())))
 
+    def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
+        with self.database.session() as session:
+            return session.get(ArtifactRecord, artifact_id)
+
     def add_artifact(
         self, artifact_id: str, *, experiment_id: str | None, kind: str, media_type: str,
         size_bytes: int, path: str, metadata: dict[str, Any] | None = None,
+        project_id: str | None = None,
     ) -> ArtifactRecord:
         record = ArtifactRecord(
             id=artifact_id, experiment_id=experiment_id, kind=kind, media_type=media_type,
             size_bytes=size_bytes, path=path, metadata_json=_dump(metadata or {}),
+            project_id=project_id or self.ensure_default_project().id,
         )
         with self.database.session() as session:
             session.merge(record)
@@ -234,16 +373,92 @@ class PlatformRepository:
     def add_evaluation(
         self, *, experiment_id: str, checkpoint_id: str, environment_hash: str,
         verifier_hash: str, split: str, config: dict[str, Any], metrics: dict[str, Any],
+        protocol_hash: str | None = None, samples: list[dict[str, Any]] | None = None,
+        project_id: str | None = None,
     ) -> EvaluationRecord:
         record = EvaluationRecord(
             id=str(uuid4()), experiment_id=experiment_id, checkpoint_id=checkpoint_id,
             environment_hash=environment_hash, verifier_hash=verifier_hash, split=split,
             config_json=_dump(config), metrics_json=_dump(metrics),
+            protocol_hash=protocol_hash,
+            project_id=project_id or self.ensure_default_project().id,
+        )
+        with self.database.session() as session:
+            session.add(record)
+            for sample in samples or []:
+                session.add(EvaluationSampleRecord(
+                    evaluation_id=record.id,
+                    task_id=str(sample["task_id"]),
+                    audio_profile_id=str(sample["audio_profile_id"]),
+                    seed=int(sample["seed"]),
+                    passed=bool(sample["passed"]),
+                    reward=float(sample["reward"]),
+                    details_json=_dump({
+                        key: value for key, value in sample.items()
+                        if key not in {"task_id", "audio_profile_id", "seed", "passed", "reward"}
+                    }),
+                ))
+            session.commit()
+        return record
+
+    def get_evaluation(self, evaluation_id: str) -> EvaluationRecord | None:
+        with self.database.session() as session:
+            return session.get(EvaluationRecord, evaluation_id)
+
+    def list_evaluation_samples(self, evaluation_id: str) -> list[EvaluationSampleRecord]:
+        with self.database.session() as session:
+            return list(session.scalars(select(EvaluationSampleRecord).where(
+                EvaluationSampleRecord.evaluation_id == evaluation_id
+            ).order_by(EvaluationSampleRecord.id)))
+
+    def add_comparison(
+        self, *, experiment_id: str, baseline_evaluation_id: str,
+        trained_evaluation_id: str, compatibility_hash: str, result: dict[str, Any],
+    ) -> ComparisonRecord:
+        record = ComparisonRecord(
+            id=str(uuid4()), experiment_id=experiment_id,
+            baseline_evaluation_id=baseline_evaluation_id,
+            trained_evaluation_id=trained_evaluation_id,
+            compatibility_hash=compatibility_hash, result_json=_dump(result),
         )
         with self.database.session() as session:
             session.add(record)
             session.commit()
         return record
+
+    def list_comparisons(self, experiment_id: str | None = None) -> list[ComparisonRecord]:
+        with self.database.session() as session:
+            query = select(ComparisonRecord).order_by(ComparisonRecord.created_at.desc())
+            if experiment_id:
+                query = query.where(ComparisonRecord.experiment_id == experiment_id)
+            return list(session.scalars(query))
+
+    def save_split_manifest(self, manifest_id: str, environment_id: str, manifest: dict[str, Any]) -> None:
+        with self.database.session() as session:
+            session.merge(SplitManifestRecord(id=manifest_id, environment_id=environment_id, manifest_json=_dump(manifest)))
+            session.commit()
+
+    def set_preflight(self, experiment_id: str, preflight: dict[str, Any]) -> ExperimentRecord:
+        with self.database.session() as session:
+            record = session.get(ExperimentRecord, experiment_id)
+            if record is None:
+                raise KeyError(experiment_id)
+            record.preflight_json = _dump(preflight)
+            session.commit()
+            return record
+
+    def add_log(self, experiment_id: str, message: str, *, level: str = "info", payload: dict[str, Any] | None = None) -> WorkerLogRecord:
+        record = WorkerLogRecord(experiment_id=experiment_id, level=level, message=message, payload_json=_dump(payload or {}))
+        with self.database.session() as session:
+            session.add(record)
+            session.commit()
+        return record
+
+    def list_logs(self, experiment_id: str) -> list[WorkerLogRecord]:
+        with self.database.session() as session:
+            return list(session.scalars(select(WorkerLogRecord).where(
+                WorkerLogRecord.experiment_id == experiment_id
+            ).order_by(WorkerLogRecord.id)))
 
     def list_evaluations(self) -> list[EvaluationRecord]:
         with self.database.session() as session:
@@ -390,7 +605,10 @@ def serialize_experiment(row: ExperimentRecord) -> dict[str, Any]:
         "id": row.id,
         "name": row.name,
         "status": row.status,
+        "project_id": row.project_id,
         "config": json.loads(row.config_json),
+        "config_hash": row.config_hash,
+        "preflight": json.loads(row.preflight_json) if row.preflight_json else None,
         "environment_id": row.environment_id,
         "agent_model_id": row.agent_model_id,
         "caller_model_id": row.caller_model_id,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+from importlib import resources
 from pathlib import Path
 import subprocess
 
@@ -57,6 +58,10 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--database", type=Path, default=Path(".audioenv/audioenv.db"))
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    app_parser = subparsers.add_parser("app", help="Launch the production API and bundled dashboard")
+    app_parser.add_argument("--data-dir", type=Path, default=Path(".audioenv"))
+    app_parser.add_argument("--host", default="127.0.0.1")
+    app_parser.add_argument("--port", type=int, default=8000)
     dev = subparsers.add_parser("dev", help="Run the local API and dashboard; workers launch per job")
     dev.add_argument("--database", type=Path, default=Path(".audioenv/audioenv.db"))
     dev.add_argument("--web-dir", type=Path, default=Path("web"))
@@ -103,6 +108,38 @@ def main(argv: list[str] | None = None) -> int:
 
         app = create_app(f"sqlite:///{args.database}")
         uvicorn.run(app, host=args.host, port=args.port)
+        return 0
+    if args.command == "app":
+        try:
+            import uvicorn
+        except ImportError as exc:
+            raise RuntimeError("Install AudioEnv with the 'platform' extra") from exc
+        from alembic import command
+        from alembic.config import Config
+        from .platform.api import create_app
+        from .platform.db import Database, PlatformRepository
+
+        data_dir = args.data_dir.resolve()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        database_path = data_dir / "audioenv.db"
+        database_url = f"sqlite:///{database_path}"
+        source_migrations = Path(__file__).resolve().parents[2] / "migrations"
+        packaged_migrations = Path(str(resources.files("audioenv").joinpath("migrations")))
+        migrations = source_migrations if source_migrations.is_dir() else packaged_migrations
+        alembic_config = Config()
+        alembic_config.set_main_option("script_location", str(migrations))
+        alembic_config.set_main_option("sqlalchemy.url", database_url)
+        command.upgrade(alembic_config, "head")
+        repository = PlatformRepository(Database(database_url))
+        repository.database.create_schema()
+        recovered = repository.recover_abandoned_jobs(stale_after_seconds=60)
+        source_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+        packaged_dist = Path(str(resources.files("audioenv").joinpath("web_dist")))
+        static_dir = source_dist if source_dist.is_dir() else packaged_dist
+        if not (static_dir / "index.html").is_file():
+            raise RuntimeError("bundled dashboard is missing; run 'npm run build' in web/")
+        print(f"AudioEnv: http://{args.host}:{args.port} (recovered jobs: {recovered})")
+        uvicorn.run(create_app(database_url, static_dir=static_dir), host=args.host, port=args.port)
         return 0
     if args.command == "dev":
         try:

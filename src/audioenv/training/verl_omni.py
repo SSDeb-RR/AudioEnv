@@ -16,7 +16,7 @@ import subprocess
 from ..contracts import ResourceEstimate, TrainerCapabilities
 
 
-PINNED_VERL_OMNI_COMMIT = "f31a6116119fd62a89554987f51ae279a567d66b"
+PINNED_VERL_OMNI_COMMIT = "eebe8a983b742960b0887026191517fe66505260"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +97,7 @@ class VerlOmniGSPOTrainer:
         preflight = self.preflight(config)
         if not preflight.available:
             raise RuntimeError("VeRL-Omni preflight failed: " + "; ".join(preflight.reasons))
-        recipe = config.checkout / "examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_lora_v1.sh"
+        recipe = config.checkout / "examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_lora_avqa_v1.sh"
         if not recipe.is_file():
             raise RuntimeError("pinned VeRL-Omni recipe is missing")
         return ("bash", str(recipe))

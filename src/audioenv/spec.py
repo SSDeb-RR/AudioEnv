@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from hashlib import sha256
 from typing import Any, Literal, TypeAlias
 
 
@@ -107,5 +108,15 @@ def public_dataclass(value: Any) -> dict[str, Any]:
     """Serialize a public contract while excluding authoring-only oracle actions."""
     data = asdict(value)
     data.pop("oracle_actions", None)
-    return data
+    return _json_safe(data)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return {"sha256": sha256(value).hexdigest(), "size_bytes": len(value)}
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
 
