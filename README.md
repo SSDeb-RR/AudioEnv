@@ -54,6 +54,11 @@ full-duplex streaming, or closed-model RL.
 - Guarded upload of implemented Omni-driver source packages. Uploads are
   statically inspected, content-addressed, and kept unavailable until isolated
   executable conformance succeeds; uploaded Python is never imported by the API.
+- Rootless OCI conformance for uploaded drivers using an operator-approved
+  immutable image (`AUDIOENV_MODEL_CONFORMANCE_IMAGES`),
+  network-off/read-only execution, optional read-only model weights, all ten
+  model gates, and content-addressed evidence. Only a complete report promotes
+  the model to `conformant`; this host has not run the GPU container gate.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
 - Pinned Repo2RLEnv-to-Harbor import in an isolated container, with protected

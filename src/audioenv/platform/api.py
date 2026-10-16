@@ -116,6 +116,11 @@ class ModelProbeRequest(StrictRequest):
     model_id: str
 
 
+class ModelConformanceSandboxRequest(StrictRequest):
+    image: str = Field(pattern=r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+    checkpoint_path: str | None = Field(default=None, max_length=4_096)
+
+
 class GPUPreflightRequest(StrictRequest):
     plan: GPUExecutionPlanV1
     model_path: str
@@ -160,6 +165,8 @@ def create_app(
     modal_transport: Any | None = None,
     local_cuda_provider: Any | None = None,
     harbor_transport: Any | None = None,
+    model_conformance_transport: Any | None = None,
+    trusted_model_conformance_images: tuple[str, ...] | None = None,
 ) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
@@ -178,6 +185,13 @@ def create_app(
         artifact_root = Path(os.environ.get("AUDIOENV_ARTIFACT_ROOT", data_root / "artifacts")).resolve()
     app.state.data_root = data_root
     app.state.artifacts = LocalArtifactStore(artifact_root)
+    app.state.model_conformance_transport = model_conformance_transport
+    configured_images = os.environ.get("AUDIOENV_MODEL_CONFORMANCE_IMAGES", "")
+    app.state.trusted_model_conformance_images = set(
+        trusted_model_conformance_images
+        if trusted_model_conformance_images is not None
+        else (item.strip() for item in configured_images.split(",") if item.strip())
+    )
     app.state.promotion_authority = PromotionEvidenceAuthority(data_root / "secrets" / "promotion-evidence.key")
     app.state.harness_registry = build_builtin_registry()
     app.state.environment_foundry = EnvironmentFoundry(data_root / "foundry" / "sources", app.state.artifacts)
@@ -507,6 +521,69 @@ def create_app(
         })
         return {"model": _model(updated), "artifact_id": stored.id,
                 "inspection": asdict(inspection)}
+
+    @app.post("/api/models/{model_id:path}/conformance-sandbox")
+    def run_model_conformance_sandbox(
+        model_id: str, request: ModelConformanceSandboxRequest,
+    ) -> dict[str, Any]:
+        row = repository.get_model(model_id)
+        if row is None:
+            raise HTTPException(404, "model not found")
+        if row.registration_state == "certified":
+            raise HTTPException(409, "certified built-in drivers do not use uploaded conformance")
+        if request.image not in app.state.trusted_model_conformance_images:
+            raise HTTPException(
+                422, "conformance image is not in the operator-approved immutable image set",
+            )
+        config = json.loads(row.config_json)
+        package = config.get("driver_package")
+        if not isinstance(package, dict) or not package.get("artifact_id"):
+            raise HTTPException(422, "upload an implemented driver package before conformance")
+        artifact = repository.get_artifact(str(package["artifact_id"]))
+        if artifact is None or artifact.kind != "model-driver-package":
+            raise HTTPException(422, "registered driver package artifact is unavailable")
+        metadata = json.loads(artifact.metadata_json)
+        if metadata.get("model_id") != model_id or metadata.get("package_sha256") != artifact.id:
+            raise HTTPException(422, "driver package artifact binding is invalid")
+        try:
+            package_payload = app.state.artifacts.get_bytes(artifact.id)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(422, "driver package artifact is unavailable") from exc
+        if sha256(package_payload).hexdigest() != artifact.id:
+            raise HTTPException(422, "driver package artifact failed content-hash verification")
+        package_path = app.state.artifacts.describe(
+            artifact.id, media_type="application/zip",
+        ).path
+        try:
+            from ..integrations.model_conformance_sandbox import (
+                DockerModelConformanceTransport, ModelConformanceSandbox,
+            )
+            transport = app.state.model_conformance_transport or DockerModelConformanceTransport()
+            report = ModelConformanceSandbox(transport).validate(
+                package_path=package_path, model_id=model_id, image=request.image,
+                checkpoint_path=Path(request.checkpoint_path) if request.checkpoint_path else None,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f"isolated model conformance failed: {exc}") from exc
+        stored = app.state.artifacts.put_json(report.model_dump(mode="json"))
+        repository.add_artifact(
+            stored.id, experiment_id=None, project_id=row.project_id,
+            kind="model-conformance-report", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path), metadata={
+                "model_id": model_id, "driver_package_artifact_id": artifact.id,
+                "runtime_image": request.image, "registered": report.registered,
+            },
+        )
+        probe = {
+            "available": report.registered,
+            "registration_state": report.registration_state,
+            "conformance": report.model_dump(mode="json"),
+            "conformance_artifact_id": stored.id,
+            "runtime_image": request.image,
+        }
+        updated = repository.set_model_probe(model_id, probe)
+        return {"model": _model(updated), "report": report.model_dump(mode="json"),
+                "artifact_id": stored.id}
 
     @app.post("/api/gpu/preflight")
     def gpu_preflight(request: GPUPreflightRequest) -> dict[str, Any]:

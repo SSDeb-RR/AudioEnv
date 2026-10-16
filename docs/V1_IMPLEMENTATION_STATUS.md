@@ -104,7 +104,17 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   exact model/module binding, the complete ordered conformance gate list, and
   hash-pinned optional dependencies. The content-addressed package remains
   `generated_needs_review`; upload never executes code or marks the model
-  available. Isolated runtime conformance is still required.
+  available.
+- Uploaded drivers now have an executable rootless-OCI conformance action in
+  the API and Models screen. It requires an immutable image digest from the
+  operator-controlled `AUDIOENV_MODEL_CONFORMANCE_IMAGES` allowlist, runs with
+  network disabled, a read-only filesystem, dropped capabilities, no host
+  socket, bounded CPU/memory/PIDs, GPU access, and an optional read-only model
+  mount. The worker imports the driver only inside that sandbox, runs the exact
+  ten-gate suite, persists the content-addressed report, and changes the model
+  to `conformant` only if every gate passes. Fake-container/API tests and a real
+  rejected-scaffold worker execution pass locally; a real custom Omni image and
+  GPU checkpoint remain externally gated.
 - The executable Omni conformance contract now checks native-audio inference,
   structured actions, token/log-probability alignment, multimodal position
   channels, response masks, declared gradient scope, a real optimizer-state
@@ -269,7 +279,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-145 passed
+152 passed
 
 uv run audioenv validate
 389 passed, 0 failed

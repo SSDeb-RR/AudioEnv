@@ -38,14 +38,15 @@ test("analyze repository and onboard an Omni model through the foundry", async (
   await page.getByRole("button", { name: "Build environment harness" }).click();
   const environmentBuild = page.locator("details").filter({ hasText: "environment · coding_repository" }).first();
   await expect(environmentBuild).toBeVisible();
-  await environmentBuild.evaluate((element: HTMLDetailsElement) => { element.open = true; });
+  await environmentBuild.locator("summary").click();
   await expect(environmentBuild.getByText(/configure and validate an OCI sandbox/)).toBeVisible();
 
-  await page.getByLabel("Foundry model ID").fill("Qwen/Qwen3-Omni-30B-A3B-Instruct");
+  const modelId = `Qwen/Qwen3-Omni-browser-${Date.now()}`;
+  await page.getByLabel("Foundry model ID").fill(modelId);
   await page.getByRole("button", { name: "Build model harness" }).click();
-  const modelBuild = page.locator("details").filter({ hasText: "model · qwen3-omni" }).first();
+  const modelBuild = page.locator("details").filter({ hasText: modelId });
   await expect(modelBuild).toBeVisible();
-  await modelBuild.evaluate((element: HTMLDetailsElement) => { element.open = true; });
+  await modelBuild.locator("summary").click();
   await expect(modelBuild.getByText(/native-audio generation/)).toBeVisible();
 });
 

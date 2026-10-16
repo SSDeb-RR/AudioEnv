@@ -48,6 +48,7 @@ audioenv-gpu-worker = "audioenv.platform.gpu_worker:main"
 audioenv-qwen-caller = "audioenv.platform.caller_service:main"
 audioenv-validation-worker = "audioenv.validation_worker:main"
 audioenv-verl-contract-check = "audioenv.training.verl_contract:main"
+audioenv-model-conformance-worker = "audioenv.models.conformance_worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/audioenv"]

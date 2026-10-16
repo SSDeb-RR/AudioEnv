@@ -54,6 +54,13 @@ not Python import. The control plane validates archive paths and sizes, exact
 model/module identity, source-only contents, immutable conformance requirements,
 and optional hash-pinned dependencies before content-addressed storage. It
 remains unavailable until an isolated runtime executes the conformance suite.
+That execution boundary is `audioenv-model-conformance-worker` inside a
+rootless OCI image addressed by digest and explicitly allowlisted by the
+operator. A user-provided immutable image cannot self-attest. FastAPI mounts only the content-addressed
+driver ZIP and an optional checkpoint read-only; the container has no network,
+host socket, writable root, added capabilities, or inherited secrets. Its exact
+ten-gate report is stored as an artifact before the registry can transition to
+`conformant`. The API process never imports uploaded Python.
 
 Repo2RLEnv generation is an explicit Foundry mode pinned to commit
 `e5e6a93a6d7947a012a361b68457a982cc85fc9e`. It runs behind the restricted
