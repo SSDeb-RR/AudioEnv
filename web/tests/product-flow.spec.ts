@@ -35,6 +35,10 @@ test("create project, train, reload, compare, and export", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Download" }).first()).toBeVisible();
   await page.goto("/evaluations");
   await expect(page.getByText(/24 samples/).first()).toBeVisible();
+  await page.locator(".table a.tr").first().click();
+  await expect(page.getByText("Protocol bindings")).toBeVisible();
+  await expect(page.getByText("Environment hash")).toBeVisible();
+  await expect(page.locator(".table .tr")).toHaveCount(25);
 });
 
 test("analyze repository and onboard an Omni model through the foundry", async ({ page }) => {
@@ -64,7 +68,7 @@ test("show persisted model probe and conformance evidence", async ({ page, reque
   expect(registered.ok()).toBeTruthy();
 
   await page.goto("/models");
-  const row = page.locator(".grid-list > div").filter({ hasText: "Probe evidence Omni" });
+  const row = page.locator(".grid-list > div").filter({ hasText: modelId });
   await row.getByRole("button", { name: "Dependency probe" }).click();
   await expect(row.getByText("Probe and conformance evidence")).toBeVisible();
   await row.getByText("Probe and conformance evidence").click();

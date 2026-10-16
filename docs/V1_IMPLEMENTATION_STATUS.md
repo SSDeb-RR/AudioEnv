@@ -72,6 +72,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   under clean, degraded, and fast-speaking audio.
 - Comparison rejects drift in environment, verifier, split, caller, audio
   pipeline, sampling, or seeds and reports a paired bootstrap interval.
+- Every evaluation row opens a detail view showing its checkpoint, environment,
+  verifier, and protocol hashes, exact evaluation configuration, and persisted
+  per-task/audio-profile/seed outcomes. Aggregate claims are therefore
+  traceable to all 24 held-out samples rather than only a headline percentage.
 - Checkpoint and manifest downloads resolve by content-addressed artifact ID;
   arbitrary paths are not accepted.
 - RunPod quote, typed-confirmation, provisioning, cancellation, budget-stop,
