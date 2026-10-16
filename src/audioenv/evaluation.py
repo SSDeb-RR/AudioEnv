@@ -15,6 +15,8 @@ from .contracts import (
     EvaluationProtocolV1,
     EvaluationResultV1,
     EvaluationSampleV1,
+    LearningEvidenceV1,
+    LearningGateCheckV1,
 )
 
 
@@ -197,6 +199,118 @@ def compare_evaluations(
         paired_delta=sum(deltas) / len(deltas),
         paired_ci_low=estimates[int(0.025 * (len(estimates) - 1))],
         paired_ci_high=estimates[int(0.975 * (len(estimates) - 1))],
+    )
+
+
+def assess_learning_evidence(
+    baseline: EvaluationResultV1,
+    trained: EvaluationResultV1,
+    *,
+    independent_baseline: EvaluationResultV1 | None = None,
+    independent_trained: EvaluationResultV1 | None = None,
+    reward_parity_verified: bool | None = None,
+    baseline_speech_quality: float | None = None,
+    trained_speech_quality: float | None = None,
+    minimum_primary_delta: float = 0.10,
+    maximum_speech_quality_regression: float = 0.05,
+) -> LearningEvidenceV1:
+    """Produce a release decision without turning missing evidence into success."""
+    primary = compare_evaluations(baseline, trained)
+    checks: list[LearningGateCheckV1] = []
+
+    def add(name: str, status: str, requirement: str, observed: str) -> None:
+        checks.append(LearningGateCheckV1(
+            name=name, status=status, requirement=requirement, observed=observed,
+        ))
+
+    add(
+        "primary_protocol_compatibility", "pass" if primary.compatible else "fail",
+        "baseline and trained evaluations use an identical protected protocol",
+        "compatible" if primary.compatible else ",".join(primary.incompatibilities),
+    )
+    primary_delta = primary.paired_delta if primary.compatible else None
+    add(
+        "primary_learning_lift",
+        "pass" if primary_delta is not None and primary_delta >= minimum_primary_delta else "fail",
+        f"paired held-out pass@1 delta >= {minimum_primary_delta:.3f}",
+        "unavailable" if primary_delta is None else f"{primary_delta:.6f}",
+    )
+
+    independent: ComparisonV1 | None = None
+    if (independent_baseline is None) != (independent_trained is None):
+        add("independent_condition", "fail", "both independent evaluations are supplied", "one evaluation missing")
+    elif independent_baseline is None:
+        add("independent_condition", "incomplete", "independent caller/audio evaluation is supplied", "not supplied")
+    else:
+        independent = compare_evaluations(independent_baseline, independent_trained)  # type: ignore[arg-type]
+        core_fields = (
+            "environment_hash", "verifier_hash", "split_manifest_hash", "split",
+            "sampling_hash", "seeds",
+        )
+        core_matches = all(
+            getattr(baseline.protocol, field) == getattr(independent_baseline.protocol, field)
+            for field in core_fields
+        )
+        condition_differs = (
+            baseline.protocol.caller_hash != independent_baseline.protocol.caller_hash
+            or baseline.protocol.audio_pipeline_hash != independent_baseline.protocol.audio_pipeline_hash
+        )
+        condition_ok = independent.compatible and core_matches and condition_differs
+        add(
+            "independent_condition", "pass" if condition_ok else "fail",
+            "same protected task protocol with a different caller or audio pipeline",
+            f"compatible={independent.compatible}; core_matches={core_matches}; condition_differs={condition_differs}",
+        )
+        delta = independent.paired_delta if condition_ok else None
+        add(
+            "independent_learning_lift", "pass" if delta is not None and delta > 0 else "fail",
+            "paired pass@1 delta > 0 under the independent condition",
+            "unavailable" if delta is None else f"{delta:.6f}",
+        )
+
+    all_baseline = baseline.samples + (() if independent_baseline is None else independent_baseline.samples)
+    all_trained = trained.samples + (() if independent_trained is None else independent_trained.samples)
+    baseline_safety = sum(row.safety_violations for row in all_baseline)
+    trained_safety = sum(row.safety_violations for row in all_trained)
+    add(
+        "safety_non_regression", "pass" if trained_safety <= baseline_safety else "fail",
+        "trained safety violations do not exceed baseline", f"{baseline_safety}->{trained_safety}",
+    )
+    baseline_repeats = sum(row.repeated_failed_calls for row in all_baseline)
+    trained_repeats = sum(row.repeated_failed_calls for row in all_trained)
+    add(
+        "repeated_call_non_regression", "pass" if trained_repeats <= baseline_repeats else "fail",
+        "trained repeated failed calls do not exceed baseline", f"{baseline_repeats}->{trained_repeats}",
+    )
+    add(
+        "reward_parity",
+        "incomplete" if reward_parity_verified is None else "pass" if reward_parity_verified else "fail",
+        "local replay, rollout, trainer export, and evaluator rewards are identical",
+        "not supplied" if reward_parity_verified is None else str(reward_parity_verified).lower(),
+    )
+    if baseline_speech_quality is None or trained_speech_quality is None:
+        add("speech_quality_non_regression", "incomplete", "speech quality regression is within threshold", "not supplied")
+    else:
+        speech_delta = trained_speech_quality - baseline_speech_quality
+        add(
+            "speech_quality_non_regression",
+            "pass" if speech_delta >= -maximum_speech_quality_regression else "fail",
+            f"speech quality delta >= {-maximum_speech_quality_regression:.3f}", f"{speech_delta:.6f}",
+        )
+
+    statuses = {item.status for item in checks}
+    status = "unmet" if "fail" in statuses else "incomplete" if "incomplete" in statuses else "validated"
+    return LearningEvidenceV1(
+        status=status,
+        claim=(
+            "native-audio learning lift validated"
+            if status == "validated" else
+            "learning-lift objective unmet" if status == "unmet" else
+            "operational training only; learning evidence incomplete"
+        ),
+        primary_comparison=primary,
+        independent_comparison=independent,
+        checks=tuple(checks), production_eligible=status == "validated",
     )
 
 

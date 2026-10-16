@@ -87,6 +87,42 @@ def test_harbor_validator_reports_unavailable_sandbox_without_execution(tmp_path
     assert report["diagnostics"] == ["rootless Docker is required"]
 
 
+def test_harbor_validator_rejects_mutable_or_secret_bearing_builds(tmp_path: Path):
+    package, bundles = _fixture(tmp_path)
+    transport = FakeTransport()
+    bundles[0].dockerfile.write_text("FROM python:3.12\nRUN echo unsafe\n")
+
+    mutable = HarborSandboxValidator(transport).validate(package, bundles)
+
+    assert mutable["passed"] is False
+    assert transport.builds == []
+    assert "mutable base image" in str(mutable["checks"])
+
+    bundles[0].dockerfile.write_text(
+        "FROM registry.example/python@sha256:" + "a" * 64
+        + "\nRUN --mount=type=secret,id=token echo unsafe\n"
+    )
+    secret_mount = HarborSandboxValidator(transport).validate(package, bundles)
+    assert secret_mount["passed"] is False
+    assert transport.builds == []
+    assert "forbidden build mount" in str(secret_mount["checks"])
+
+
+def test_harbor_validator_rejects_remote_add(tmp_path: Path):
+    package, bundles = _fixture(tmp_path)
+    transport = FakeTransport()
+    bundles[0].dockerfile.write_text(
+        "FROM registry.example/base@sha256:" + "b" * 64
+        + "\nADD https://example.com/payload /app/payload\n"
+    )
+
+    report = HarborSandboxValidator(transport).validate(package, bundles)
+
+    assert report["passed"] is False
+    assert transport.builds == []
+    assert "remote ADD" in str(report["checks"])
+
+
 def test_real_docker_probe_is_truthful():
     reasons = DockerHarborTransport().probe()
     assert isinstance(reasons, tuple)

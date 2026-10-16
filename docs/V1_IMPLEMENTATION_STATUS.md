@@ -78,6 +78,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   under clean, degraded, and fast-speaking audio.
 - Comparison rejects drift in environment, verifier, split, caller, audio
   pipeline, sampling, or seeds and reports a paired bootstrap interval.
+- A persisted learning-evidence endpoint combines the primary paired
+  comparison with an independently configured caller/audio comparison, safety
+  and repeated-call non-regression, reward-parity evidence, and speech-quality
+  measurements. Missing evidence produces `incomplete`, failed requirements
+  produce `unmet`, and only a complete passing report becomes
+  `production_eligible`; the result is content-addressed.
 - Every evaluation row opens a detail view showing its checkpoint, environment,
   verifier, and protocol hashes, exact evaluation configuration, and persisted
   per-task/audio-profile/seed outcomes. Aggregate claims are therefore
@@ -131,6 +137,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   but truthfully reports `generated_needs_review` and remains unavailable.
   Caller and trainer choices in the run wizard are resolved from declared
   capabilities instead of a hard-coded menu.
+- Unknown-family SDK archives now include a source-config-derived,
+  content-hash-bound adapter plan covering discovered architecture classes,
+  processor/AutoMap entry points, waveform construction, structured actions,
+  token/log-probability lineage, speech rendering, LoRA scope, and checkpoint
+  round trips. MiniCPM-o, Moshi, and Ultravox names receive distinct family
+  scaffolds but remain unavailable until isolated conformance passes.
 - Model registration now persists a separate `certified`, `conformant`,
   `generated_needs_review`, or `rejected` state. A successful dependency probe
   alone cannot mark a model usable; only the built-in certified local proof or
@@ -184,6 +196,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   all hard gates pass. Fake-container tests exercise the complete lifecycle;
   this Mac has no rootless Docker runtime, so real untrusted-container
   acceptance remains unrun and the endpoint fails closed here.
+- Harbor promotion also rejects mutable `FROM` images, remote `ADD` sources,
+  and secret, SSH, or bind build mounts before invoking the container
+  transport, preventing generated tasks from weakening image reproducibility
+  or importing operator secrets during bootstrap.
 - Environment promotion no longer accepts caller-supplied gate booleans. The
   backend aggregates persisted validator checks, hashes the protected verifier
   artifact, issues content-addressed HMAC-signed evidence with a locally held
@@ -436,7 +452,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-185 passed
+190 passed
 
 uv run audioenv validate
 389 passed, 0 failed

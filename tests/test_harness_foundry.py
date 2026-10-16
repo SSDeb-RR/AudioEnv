@@ -144,6 +144,10 @@ def test_model_foundry_selects_family_driver_and_scaffolds_unknown(tmp_path):
     manifest = json.loads(archive.read("manifest.json"))
     assert manifest["registration_state"] == "generated_needs_review"
     assert "lora_update" in manifest["required_conformance"]
+    assert "adapter_plan_sha256" in manifest
+    adapter_plan = json.loads(archive.read("adapter_spec.json"))
+    assert adapter_plan["schema_version"] == "audioenv.omni-adapter-plan/v1"
+    assert adapter_plan["implementation_order"][-1].startswith("pass every isolated")
     driver_source = archive.read(next(name for name in archive.namelist() if name.endswith("/driver.py"))).decode()
     assert "conformance_optimizer_step" in driver_source
     assert "NotImplementedError" in driver_source

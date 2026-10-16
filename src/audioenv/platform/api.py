@@ -26,10 +26,10 @@ except ImportError as exc:  # pragma: no cover
 from .db import Database, InvalidTransition, PlatformRepository, serialize_experiment
 from ..artifacts import LocalArtifactStore
 from ..authoring import CustomTaskInput, DeterministicEnvironmentAuthor
-from ..evaluation import package_hashes
+from ..evaluation import assess_learning_evidence, build_evaluation_result, package_hashes
 from ..contracts import (
     EnvironmentPackageV1, GPUExecutionPlanV1, GPUWorkerExperimentV1,
-    PromotionEvidenceV1, SandboxPolicyV1,
+    EvaluationProtocolV1, EvaluationSampleV1, PromotionEvidenceV1, SandboxPolicyV1,
 )
 from ..foundry import EnvironmentFoundry, ModelFoundry
 from ..harnesses import build_builtin_registry, resolve_compatibility
@@ -169,6 +169,14 @@ class CompatibilityRequest(StrictRequest):
     environment_id: str
     model_id: str
     caller_id: str | None = None
+
+
+class LearningEvidenceRequest(StrictRequest):
+    baseline_evaluation_id: str
+    trained_evaluation_id: str
+    independent_baseline_evaluation_id: str | None = None
+    independent_trained_evaluation_id: str | None = None
+    reward_parity_artifact_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def create_app(
@@ -866,6 +874,56 @@ def create_app(
             "compatibility_hash": row.compatibility_hash,
             "result": json.loads(row.result_json),
         } for row in repository.list_comparisons(experiment_id)]
+
+    @app.post("/api/experiments/{experiment_id}/learning-evidence", status_code=201)
+    def create_learning_evidence(
+        experiment_id: str, request: LearningEvidenceRequest,
+    ) -> dict[str, Any]:
+        record = repository.get_experiment(experiment_id)
+        if record is None:
+            raise HTTPException(404, "experiment not found")
+        identifiers = (
+            request.baseline_evaluation_id, request.trained_evaluation_id,
+            request.independent_baseline_evaluation_id,
+            request.independent_trained_evaluation_id,
+        )
+        rows = [repository.get_evaluation(value) if value else None for value in identifiers]
+        if rows[0] is None or rows[1] is None:
+            raise HTTPException(422, "baseline and trained evaluations are required")
+        if any(row is not None and row.experiment_id != experiment_id for row in rows):
+            raise HTTPException(422, "all evaluations must belong to the experiment")
+        if (rows[2] is None) != (rows[3] is None):
+            raise HTTPException(422, "independent baseline and trained evaluations must be supplied together")
+        baseline = _evaluation_result(repository, rows[0])
+        trained = _evaluation_result(repository, rows[1])
+        independent_baseline = _evaluation_result(repository, rows[2]) if rows[2] else None
+        independent_trained = _evaluation_result(repository, rows[3]) if rows[3] else None
+        reward_parity = _verified_reward_parity(
+            app, repository, experiment_id, request.reward_parity_artifact_id,
+            baseline.protocol.protocol_hash, trained.protocol.protocol_hash,
+        )
+        baseline_metrics = json.loads(rows[0].metrics_json)
+        trained_metrics = json.loads(rows[1].metrics_json)
+        evidence = assess_learning_evidence(
+            baseline, trained,
+            independent_baseline=independent_baseline,
+            independent_trained=independent_trained,
+            reward_parity_verified=reward_parity,
+            baseline_speech_quality=baseline_metrics.get("speech_quality"),
+            trained_speech_quality=trained_metrics.get("speech_quality"),
+        )
+        stored = app.state.artifacts.put_json(evidence.model_dump(mode="json"))
+        artifact = repository.add_artifact(
+            stored.id, experiment_id=experiment_id, project_id=record.project_id,
+            kind="learning-evidence", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path),
+            metadata={"status": evidence.status, "production_eligible": evidence.production_eligible},
+        )
+        repository.add_log(
+            experiment_id, "Learning-evidence decision created",
+            payload={"artifact_id": stored.id, "status": evidence.status},
+        )
+        return {"artifact": _artifact(artifact), "evidence": evidence.model_dump(mode="json")}
 
     @app.post("/api/experiments", status_code=201)
     def create_experiment(request: ExperimentCreate) -> dict[str, Any]:
@@ -2586,6 +2644,54 @@ def _evaluation(repository: PlatformRepository, row, *, samples: bool = False) -
             **json.loads(sample.details_json),
         } for sample in repository.list_evaluation_samples(row.id)]
     return data
+
+
+def _evaluation_result(repository: PlatformRepository, row):
+    protocol = EvaluationProtocolV1.model_validate(json.loads(row.config_json))
+    samples = []
+    for sample in repository.list_evaluation_samples(row.id):
+        details = json.loads(sample.details_json)
+        samples.append(EvaluationSampleV1(
+            task_id=sample.task_id,
+            audio_profile_id=sample.audio_profile_id,
+            seed=sample.seed,
+            passed=sample.passed,
+            reward=sample.reward,
+            safety_violations=int(details.get("safety_violations", 0)),
+            invalid_calls=int(details.get("invalid_calls", 0)),
+            repeated_failed_calls=int(details.get("repeated_failed_calls", 0)),
+            failure_category=details.get("failure_category"),
+        ))
+    result = build_evaluation_result(protocol, samples)
+    metrics = json.loads(row.metrics_json)
+    expected_rate = metrics.get("success_rate")
+    if expected_rate is not None and abs(float(expected_rate) - result.success_rate) > 1e-9:
+        raise HTTPException(409, "persisted evaluation aggregate does not match its samples")
+    if row.protocol_hash and row.protocol_hash != protocol.protocol_hash:
+        raise HTTPException(409, "persisted evaluation protocol hash is invalid")
+    return result
+
+
+def _verified_reward_parity(
+    app, repository: PlatformRepository, experiment_id: str,
+    artifact_id: str | None, baseline_protocol_hash: str, trained_protocol_hash: str,
+) -> bool | None:
+    if artifact_id is None:
+        return None
+    artifact = repository.get_artifact(artifact_id)
+    if artifact is None or artifact.experiment_id != experiment_id or artifact.kind != "reward-parity-report":
+        raise HTTPException(422, "reward parity artifact is missing or belongs to another experiment")
+    try:
+        payload = json.loads(app.state.artifacts.get_bytes(artifact_id))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise HTTPException(409, "reward parity artifact is unavailable or invalid") from exc
+    if payload.get("schema_version") != "audioenv.reward-parity/v1":
+        raise HTTPException(422, "unsupported reward parity evidence schema")
+    if payload.get("baseline_protocol_hash") != baseline_protocol_hash:
+        raise HTTPException(422, "reward parity evidence is bound to another baseline protocol")
+    if payload.get("trained_protocol_hash") != trained_protocol_hash:
+        raise HTTPException(422, "reward parity evidence is bound to another trained protocol")
+    return bool(payload.get("verified") is True)
 
 
 app = create_app()

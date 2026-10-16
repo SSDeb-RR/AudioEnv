@@ -153,6 +153,40 @@ def test_api_launch_train_reload_compare_and_serve_spa(tmp_path):
     assert len(evaluations) == 2
     comparison = client.get(f"/api/comparisons?experiment_id={experiment['id']}").json()[0]["result"]
     assert comparison["compatible"] and comparison["paired_sample_count"] == 24
+    baseline_eval = next(item for item in evaluations if item["metrics"]["kind"] == "baseline")
+    trained_eval = next(item for item in evaluations if item["metrics"]["kind"] == "trained")
+    learning = client.post(
+        f"/api/experiments/{experiment['id']}/learning-evidence",
+        json={
+            "baseline_evaluation_id": baseline_eval["id"],
+            "trained_evaluation_id": trained_eval["id"],
+        },
+    )
+    assert learning.status_code == 201, learning.text
+    assert learning.json()["evidence"]["status"] == "incomplete"
+    assert learning.json()["evidence"]["production_eligible"] is False
+    assert learning.json()["artifact"]["kind"] == "learning-evidence"
+    forged = app.state.artifacts.put_json({
+        "schema_version": "audioenv.reward-parity/v1",
+        "verified": True,
+        "baseline_protocol_hash": "0" * 64,
+        "trained_protocol_hash": "0" * 64,
+    })
+    app.state.repository.add_artifact(
+        forged.id, experiment_id=experiment["id"], project_id=project["id"],
+        kind="reward-parity-report", media_type=forged.media_type,
+        size_bytes=forged.size_bytes, path=str(forged.path),
+    )
+    rejected_parity = client.post(
+        f"/api/experiments/{experiment['id']}/learning-evidence",
+        json={
+            "baseline_evaluation_id": baseline_eval["id"],
+            "trained_evaluation_id": trained_eval["id"],
+            "reward_parity_artifact_id": forged.id,
+        },
+    )
+    assert rejected_parity.status_code == 422
+    assert "another baseline protocol" in rejected_parity.text
     traces = client.get(f"/api/experiments/{experiment['id']}/traces").json()
     assert traces["available"] and len(traces["traces"]) == 20
     assert traces["traces"][-1]["training_step"] == 20

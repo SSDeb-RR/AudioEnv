@@ -13,6 +13,7 @@ from pathlib import PurePosixPath
 import shlex
 import shutil
 import subprocess
+import re
 from typing import Protocol
 
 from ..adapters.harbor import HarborTaskBundle
@@ -138,6 +139,7 @@ class HarborSandboxValidator:
         for task in bundles:
             image_tag = f"audioenv-harbor:{task.content_hash[:24]}"
             try:
+                _validate_build_definition(task)
                 self.transport.build(task=task, image_tag=image_tag, policy=policy)
                 checks.append(_check(f"{task.task_id}:sandbox_build", True))
                 oracle_a = self.transport.trial(task=task, image_tag=image_tag, mode="oracle", policy=policy)
@@ -175,6 +177,41 @@ def _adversarial_fixture(task: HarborTaskBundle) -> Path | None:
     if not folder.is_dir():
         return None
     return next((path for path in sorted(folder.iterdir()) if path.is_file() and not path.is_symlink()), None)
+
+
+def _validate_build_definition(task: HarborTaskBundle) -> None:
+    """Reject non-reproducible or secret-bearing image build primitives."""
+    dockerfile = task.dockerfile.read_text(encoding="utf-8", errors="strict")
+    logical_lines = re.sub(r"\\\r?\n", " ", dockerfile).splitlines()
+    from_count = 0
+    for number, raw in enumerate(logical_lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        instruction, _, value = line.partition(" ")
+        instruction = instruction.upper()
+        value = value.strip()
+        if instruction == "FROM":
+            from_count += 1
+            parts = [part for part in value.split() if not part.startswith("--platform=")]
+            image = parts[0] if parts else ""
+            if image.casefold() != "scratch" and not re.fullmatch(
+                r"[^\s@]+@sha256:[0-9a-f]{64}", image,
+            ):
+                raise ValueError(
+                    f"Dockerfile line {number} uses a mutable base image; pin FROM by sha256"
+                )
+        if instruction == "ADD" and re.search(
+            r"(?:https?|git|ssh)://|git@", value, flags=re.IGNORECASE,
+        ):
+            raise ValueError(f"Dockerfile line {number} uses a remote ADD source")
+        if instruction == "RUN" and re.search(
+            r"--mount\s*=\s*type\s*=\s*(?:secret|ssh|bind)\b",
+            value, flags=re.IGNORECASE,
+        ):
+            raise ValueError(f"Dockerfile line {number} requests a forbidden build mount")
+    if from_count == 0:
+        raise ValueError("Dockerfile requires at least one FROM instruction")
 
 
 def _verifier_hash(bundles: tuple[HarborTaskBundle, ...]) -> str:

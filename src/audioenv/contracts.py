@@ -345,6 +345,25 @@ class ComparisonV1(FrozenModel):
     paired_ci_high: float | None = None
 
 
+class LearningGateCheckV1(FrozenModel):
+    name: str
+    status: Literal["pass", "fail", "incomplete"]
+    requirement: str
+    observed: str
+
+
+class LearningEvidenceV1(FrozenModel):
+    """Claim-safe decision over primary and independent held-out evidence."""
+
+    schema_version: Literal["audioenv.learning-evidence/v1"] = "audioenv.learning-evidence/v1"
+    status: Literal["validated", "unmet", "incomplete"]
+    claim: str
+    primary_comparison: ComparisonV1
+    independent_comparison: ComparisonV1 | None = None
+    checks: tuple[LearningGateCheckV1, ...]
+    production_eligible: bool
+
+
 class TrainerDescriptor(FrozenModel):
     id: str
     display_name: str

@@ -281,7 +281,7 @@ class ModelFoundry:
                 review_items=("run the CUDA load, native-audio generation, log-probability, LoRA, and reload conformance gates",),
             )
         artifact = self.artifacts.put_bytes(
-            build_driver_scaffold(model_id, source, family), media_type="application/zip",
+            build_driver_scaffold(model_id, source, family, config), media_type="application/zip",
         )
         return ModelOnboardingReport(
             model_id=model_id, source=source, detected_family=family, selected_driver=None,
@@ -406,4 +406,10 @@ def _detect_model_family(model_id: str, config: dict[str, Any]) -> str:
         return "qwen3-omni"
     if "qwen2.5-omni" in normalized or "qwen2-5-omni" in normalized:
         return "qwen2.5-omni"
+    if "minicpm-o" in normalized or "minicpmo" in normalized:
+        return "minicpm-o"
+    if "moshi" in normalized:
+        return "moshi"
+    if "ultravox" in normalized:
+        return "ultravox"
     return "unknown"
