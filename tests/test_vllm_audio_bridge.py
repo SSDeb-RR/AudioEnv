@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 
 import pytest
@@ -31,8 +32,16 @@ class _Server:
         )
 
 
-def _request(*, tokens=(), audio=None):
-    multimodal = None if audio is None else {"audio": audio, "sr": 24_000}
+class _PinnedMultimodalPayload(Mapping):
+    """Contract fake matching vLLM-Omni's non-dict Mapping payload."""
+
+    def __init__(self, values): self.values = values
+    def __getitem__(self, key): return self.values[key]
+    def __iter__(self) -> Iterator[str]: return iter(self.values)
+    def __len__(self): return len(self.values)
+
+
+def _request(*, tokens=(), multimodal=None):
     completion = SimpleNamespace(
         token_ids=list(tokens), log_probs=[-0.1] * len(tokens), multimodal_output=multimodal,
     )
@@ -44,7 +53,12 @@ def test_bridge_binds_same_request_thinker_tokens_and_talker_audio():
     assert not install_native_audio_bridge(_Server)
     thinker = SimpleNamespace(stage_id=0, request_output=_request(tokens=(10, 11)))
     audio = [0.1, -0.1]
-    final = SimpleNamespace(stage_id=2, request_output=_request(audio=audio))
+    payload = _PinnedMultimodalPayload({"model_outputs": [audio], "sr": [24_000]})
+    final = SimpleNamespace(
+        stage_id=2,
+        request_output=_request(multimodal=payload),
+        multimodal_output=payload,
+    )
     server = _Server([thinker, final])
     output = asyncio.run(server._run_generation("prompt", ["params"], "request", None, 0))
     tokens = server._process_output(output, None, {})
@@ -59,7 +73,11 @@ def test_bridge_fails_closed_when_pipeline_drops_either_stage():
     install_native_audio_bridge(MissingServer)
     with pytest.raises(RuntimeError, match="stage-0 Thinker"):
         asyncio.run(MissingServer([
-            SimpleNamespace(stage_id=2, request_output=_request(audio=[0.0])),
+            SimpleNamespace(
+                stage_id=2,
+                request_output=_request(multimodal={"audio": [0.0], "sr": 24_000}),
+                multimodal_output={"audio": [0.0], "sr": 24_000},
+            ),
         ])._run_generation("prompt", [], "request", None, 0))
 
     thinker = SimpleNamespace(stage_id=0, request_output=_request(tokens=(1,)))

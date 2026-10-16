@@ -12,6 +12,7 @@ revisions and fails closed if either side of the native output is absent.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -64,7 +65,7 @@ def install_native_audio_bridge(server_class=None) -> bool:
         if thinker_output is None:
             raise RuntimeError("AudioEnv native rollout is missing bound Thinker output")
         audio_request = getattr(final_output, "request_output", None)
-        waveform, sample_rate = _extract_audio(audio_request)
+        waveform, sample_rate = _extract_audio(final_output)
         if waveform is None:
             raise RuntimeError("AudioEnv native rollout is missing bound Talker waveform")
         final_output.request_output = thinker_output
@@ -85,15 +86,37 @@ def install_native_audio_bridge(server_class=None) -> bool:
     return True
 
 
-def _extract_audio(request_output: Any) -> tuple[Any | None, int]:
-    if request_output is None or not getattr(request_output, "outputs", None):
+def _extract_audio(final_output: Any) -> tuple[Any | None, int]:
+    """Extract one request's waveform from the pinned Omni output contract.
+
+    ``OmniRequestOutput.multimodal_output`` is the public bridge across both
+    pipeline and diffusion modes. At the pinned vLLM-Omni revision it is a
+    ``MultimodalPayload`` (a ``Mapping``, not a ``dict``), and Qwen Code2Wav
+    names its waveform field ``model_outputs``. Values may still be wrapped in
+    a single-item sequence after per-request output processing.
+    """
+
+    payload = getattr(final_output, "multimodal_output", None)
+    if not isinstance(payload, Mapping):
         return None, 0
-    completion = request_output.outputs[0]
-    payload = getattr(completion, "multimodal_output", None)
-    if not isinstance(payload, dict):
-        return None, 0
-    waveform = payload.get("audio")
+    waveform = payload.get("audio", payload.get("model_outputs"))
     sample_rate = payload.get("sr", payload.get("sample_rate", 24_000))
+    waveform = _unwrap_single_request_value(waveform)
+    sample_rate = _unwrap_single_request_value(sample_rate)
     if hasattr(sample_rate, "item"):
         sample_rate = sample_rate.item()
-    return waveform, int(sample_rate)
+    try:
+        sample_rate_value = int(sample_rate)
+    except (TypeError, ValueError):
+        return None, 0
+    if waveform is None or sample_rate_value <= 0:
+        return None, 0
+    return waveform, sample_rate_value
+
+
+def _unwrap_single_request_value(value: Any) -> Any:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if len(value) != 1:
+            return None
+        return value[0]
+    return value

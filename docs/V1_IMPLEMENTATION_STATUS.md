@@ -254,9 +254,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - The Qwen rollout now selects vLLM-Omni's full Thinker → Talker → Code2Wav
   pipeline. A revision-pinned bridge retains the stage-0 policy tokens and
   log-probabilities plus the stage-2 waveform from the same generation request
-  and fails closed if either is absent. This closes the prior architectural
-  gap where Thinker-only rollout could not produce natively bound agent audio;
-  CUDA execution of the bridge remains a release gate.
+  and fails closed if either is absent. Its contract test mirrors the pinned
+  mapping-based `MultimodalPayload` and Qwen Code2Wav's actual
+  `model_outputs`/`sr` fields instead of a synthetic `audio` dictionary. This
+  closes the prior architectural gap where Thinker-only rollout could not
+  produce natively bound agent audio; CUDA execution of the bridge remains a
+  release gate.
 - The frozen Qwen caller now has a loopback-only service boundary with one
   model resident on its assigned GPU set and isolated conversation state for
   every rollout. Private goals remain inside the service, responses return

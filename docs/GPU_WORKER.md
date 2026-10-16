@@ -89,7 +89,11 @@ optimizer batch to the base-policy label.
 The pinned native-audio bridge retains stage-0 Thinker tokens/log-probabilities
 and the stage-2 Code2Wav waveform from the same vLLM-Omni request. It fails
 closed if either output is absent, preventing an unrelated TTS waveform from
-being attached to a trainable action.
+being attached to a trainable action. The bridge reads the pinned
+`OmniRequestOutput.multimodal_output` contract directly: it accepts the
+mapping-based `MultimodalPayload`, unwraps Code2Wav's per-request
+`model_outputs`/`sr` values, and only then temporarily substitutes the retained
+Thinker request for VeRL token processing.
 
 This correct launch and reward boundary does not by itself prove the complete
 multi-turn Qwen caller/agent loop. That remains a GPU acceptance item until the
