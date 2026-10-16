@@ -31,6 +31,7 @@ class HarnessDescriptor(FrozenModel):
     requires: tuple[str, ...] = ()
     configuration_schema: dict[str, Any] = Field(default_factory=dict)
     implementation: str | None = None
+    release_tier: Literal["certified", "release_candidate", "experimental"] = "certified"
 
 
 class SourceAnalysisReport(FrozenModel):
@@ -172,13 +173,15 @@ def build_builtin_registry() -> HarnessRegistry:
             capabilities=("gspo", "audio-input", "structured-tools", "peft-lora", "distributed"),
             requires=("audio-input", "structured-tools", "token-logprobs", "trainable", "peft-lora", "distributed"),
             implementation="audioenv.training.verl_omni:VerlOmniGSPOTrainer",
+            release_tier="release_candidate",
         ),
         HarnessDescriptor(
-            id="qwen3-omni-thinker-grpo-lora", kind="trainer", display_name="Qwen3-Omni Thinker GRPO LoRA",
-            status="blocked", status_reason="GPU acceptance has not run",
+            id="qwen3-omni-thinker-grpo-lora", kind="trainer", display_name="Qwen3-Omni Thinker GRPO LoRA · Experimental",
+            status="blocked", status_reason="experimental; independent GPU acceptance has not run",
             capabilities=("grpo", "audio-input", "structured-tools", "peft-lora", "distributed"),
             requires=("audio-input", "structured-tools", "token-logprobs", "trainable", "peft-lora", "distributed"),
             implementation="audioenv.training.verl_omni:VerlOmniGRPOTrainer",
+            release_tier="experimental",
         ),
         HarnessDescriptor(
             id="local-subprocess", kind="provider", display_name="Local subprocess",

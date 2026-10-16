@@ -174,6 +174,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   vLLM-Omni Qwen pipeline, FSDP2, Thinker-only LoRA targets, grouped GRPO
   advantages, and a protected AudioEnv reward function. The prior obsolete
   config-path launcher and fictitious hook environment variables were removed.
+- Trainer registry, API preflight, and dashboard records expose release
+  maturity instead of presenting both algorithms equally: GSPO is the
+  `release_candidate`; GRPO is `experimental` until independently accepted on
+  real CUDA hardware.
 - The VeRL agent loop no longer supplies a precomputed reward score, which
   would cause upstream batching to bypass the configured scorer. Protected
   terminal/process results and the immutable verifier hash now flow through
@@ -280,9 +284,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ## Blocked
 
-- Qwen3-Omni-30B-A3B native caller/agent execution and VeRL-Omni GSPO/GRPO LoRA
+- Qwen3-Omni-30B-A3B native caller/agent execution and VeRL-Omni GSPO LoRA
   require approved Linux CUDA infrastructure, model weights, credentials, a
-  live quote, maximum budget/runtime, and typed launch confirmation.
+  live quote, maximum budget/runtime, and typed launch confirmation. GRPO has
+  the same external prerequisites but remains an experimental second gate.
 - The UI reports `Integration ready; GPU acceptance not run`.
 - Native-audio learning lift, independent Qwen caller transfer, GPU utilization,
   and paid cost remain blocked until that run succeeds.

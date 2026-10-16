@@ -1457,6 +1457,10 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
                      "basis": basis},
             "resource_estimate": None, "launch_requires_quote": provider_id != "local-cuda",
             "gpu_acceptance_status": "not_run",
+            "trainer_release_tier": (
+                "experimental" if trainer_id == "qwen3-omni-thinker-grpo-lora"
+                else "release_candidate"
+            ),
         }
     if trainer_id not in {"audioenv/small-audio-reinforce", "audioenv/tiny-reinforce"}:
         reasons.append("trainer is not available on the local provider")

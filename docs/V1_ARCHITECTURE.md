@@ -152,6 +152,9 @@ GRPO plugins delegate Qwen3 Thinker LoRA to VeRL-Omni v0.2 pinned at
 `49dedb6ec0691588494b629fc1b610a86612966b`; both use grouped GRPO outcome
 advantages. Talker, codec, audio tower, caller, and reference policy remain
 frozen. Environment and reward code contain no optimizer-specific behavior.
+Trainer descriptors also carry a release tier. GSPO is the Qwen vertical
+slice's `release_candidate`; GRPO remains `experimental` until a separate
+CUDA acceptance run verifies its optimizer path.
 
 Image construction and worker startup both execute an upstream-contract audit.
 The audit imports the pinned VeRL packages, confirms AudioEnv's agent-loop

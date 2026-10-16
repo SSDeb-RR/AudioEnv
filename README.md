@@ -75,8 +75,9 @@ full-duplex streaming, or closed-model RL.
   adversarial trials without returning private verifier output; it fails
   closed when that runtime or a required fixture is unavailable.
 - `TrajectoryV2`, a model-driven caller/agent rollout worker, and distinct
-  VeRL-Omni v0.2 GSPO and GRPO Thinker-LoRA plugins. These paths are code-ready
-  but remain GPU-unverified.
+  VeRL-Omni v0.2 GSPO and GRPO Thinker-LoRA plugins. GSPO is the release
+  candidate; GRPO remains explicitly experimental until its own GPU acceptance
+  run. Both paths are code-ready but GPU-unverified.
 - A provider-neutral `audioenv-gpu-worker` bundle/event/artifact contract used
   by the verified local training backend and the CUDA-gated Qwen backend.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
@@ -217,7 +218,9 @@ not download weights and reports missing CUDA, checkpoint, dependency, and
 capacity requirements explicitly. The CPU `SmallAudioToolPolicyTrainer` is a
 real audio-conditioned platform proof. `VerlOmniGSPOTrainer` and
 `VerlOmniGRPOTrainer` are distinct strict launch plugins for pinned VeRL-Omni
-v0.2 and are not represented as having run on this host.
+v0.2 and are not represented as having run on this host. Their registry and
+preflight records expose release maturity: GSPO is `release_candidate`, while
+GRPO is `experimental` until independently accepted on CUDA.
 
 Install optional integrations only when needed:
 

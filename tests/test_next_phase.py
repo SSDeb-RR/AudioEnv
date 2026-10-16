@@ -23,6 +23,7 @@ from audioenv.contracts import (
     TrajectoryV2,
 )
 from audioenv.integrations.repo2rlenv import Repo2RLEnvGenerator, SandboxResult
+from audioenv.harnesses import build_builtin_registry
 from audioenv.platform.gpu import LocalCUDAExecutionProvider
 from audioenv.platform.runpod import RunPodConfig, RunPodSecureCloudProvider
 from audioenv.reference import build_reference_package
@@ -98,6 +99,15 @@ def test_native_trajectory_is_persisted_per_worker(monkeypatch, tmp_path):
     row = json.loads(path.read_text().splitlines()[0])
     assert row["schema_version"] == "audioenv.trajectory/v2"
     assert row["task_id"] == trajectory.task_id
+
+
+def test_trainer_registry_keeps_grpo_experimental_until_separate_acceptance():
+    registry = build_builtin_registry()
+    gspo = registry.get("qwen3-omni-thinker-gspo-lora")
+    grpo = registry.get("qwen3-omni-thinker-grpo-lora")
+    assert gspo is not None and gspo.release_tier == "release_candidate"
+    assert grpo is not None and grpo.release_tier == "experimental"
+    assert "Experimental" in grpo.display_name
 
 def test_promotion_requires_all_gates_and_immutable_verifier():
     checks = {name: True for name in (
