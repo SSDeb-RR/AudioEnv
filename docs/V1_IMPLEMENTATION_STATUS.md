@@ -328,6 +328,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   flattened prompt and masked response sequence. Later caller observations are
   mask-zero context, but remain traceably bound to their audio artifacts;
   feature spans that escape the policy sequence are rejected.
+- A dependency-light end-to-end Qwen/τ² runtime contract test now drives the
+  production rollout function through a protected task reset, frozen caller
+  session, structured tool call, intermediate spoken turn, second caller-audio
+  observation, terminal speech, official reward, mask-zero observation tokens,
+  and caller cleanup. Model and service boundaries are faked; CUDA acceptance
+  is still required for the real checkpoint.
 - The immutable GPU image now runs `audioenv-verl-contract-check` after
   installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
   output fields, async postprocessor hook, `audioenv_agent` registration,
@@ -381,7 +387,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-171 passed
+172 passed
 
 uv run audioenv validate
 389 passed, 0 failed
