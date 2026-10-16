@@ -252,8 +252,12 @@ def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch
     checkout = tmp_path / "verl"; checkout.mkdir()
     model = tmp_path / "model"; model.mkdir()
     data = tmp_path / "rollouts.parquet"; data.write_bytes(b"fixture")
+    validation = tmp_path / "validation.parquet"; validation.write_bytes(b"fixture")
     monkeypatch.setattr("audioenv.training.verl_omni._git_revision", lambda _: "49dedb6ec0691588494b629fc1b610a86612966b")
-    base = dict(checkout=checkout, model_path=model, dataset_path=data, output_dir=tmp_path / "out")
+    base = dict(
+        checkout=checkout, model_path=model, dataset_path=data,
+        validation_dataset_path=validation, output_dir=tmp_path / "out",
+    )
     gspo = VerlOmniGSPOTrainer().launch_command(VerlOmniConfig(**base, algorithm="gspo"), require_preflight=False)
     grpo = VerlOmniGRPOTrainer().launch_command(VerlOmniConfig(**base, algorithm="grpo"), require_preflight=False)
     assert "actor_rollout_ref.actor.policy_loss.loss_mode=gspo" in gspo
@@ -266,6 +270,14 @@ def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch
     assert "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_mode=full" in gspo
     assert "actor_rollout_ref.rollout.agent.default_agent_loop=audioenv_agent" in gspo
     assert "reward.custom_reward_function.path=pkg://audioenv.training.verl_plugin" in gspo
+    assert f"data.train_files={data.resolve()}" in gspo
+    assert f"data.val_files={validation.resolve()}" in gspo
+
+    same = VerlOmniConfig(
+        checkout=checkout, model_path=model, dataset_path=data,
+        validation_dataset_path=data, output_dir=tmp_path / "out", algorithm="gspo",
+    )
+    assert any("different files" in item for item in VerlOmniGSPOTrainer().validate_config(same))
 
 
 def test_verl_reward_uses_only_hash_bound_protected_payload():

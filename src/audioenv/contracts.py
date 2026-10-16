@@ -624,6 +624,7 @@ class GPUWorkerExperimentV1(FrozenModel):
     model_path: str | None = None
     caller_model_path: str | None = None
     rollout_dataset_path: str | None = None
+    validation_dataset_path: str | None = None
     verl_checkout: str | None = None
     tau2_checkout: str | None = None
     output_dir: str
@@ -643,6 +644,7 @@ class GPUWorkerExperimentV1(FrozenModel):
                 "model_path": self.model_path,
                 "caller_model_path": self.caller_model_path,
                 "rollout_dataset_path": self.rollout_dataset_path,
+                "validation_dataset_path": self.validation_dataset_path,
                 "verl_checkout": self.verl_checkout,
                 "tau2_checkout": self.tau2_checkout,
             }

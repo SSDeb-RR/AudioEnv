@@ -91,6 +91,17 @@ def main(argv: list[str] | None = None) -> int:
     foundry_model.add_argument("model_id")
     foundry_model.add_argument("--source")
     foundry_model.add_argument("--data-dir", type=Path, default=Path(".audioenv"))
+    tau2_dataset = subparsers.add_parser("tau2-dataset", help="Build a hash-bound VeRL tau2 JSONL split")
+    tau2_dataset.add_argument("--checkout", type=Path, required=True)
+    tau2_dataset.add_argument("--output", type=Path, required=True)
+    tau2_dataset.add_argument("--split", choices=("train", "test"), required=True)
+    tau2_dataset.add_argument("--experiment-id", required=True)
+    tau2_dataset.add_argument("--environment-hash", required=True)
+    tau2_dataset.add_argument("--verifier-hash", required=True)
+    tau2_dataset.add_argument("--policy-version", required=True)
+    tau2_dataset.add_argument("--checkpoint-id", default="base")
+    tau2_dataset.add_argument("--seed", type=int, action="append", dest="seeds")
+    tau2_dataset.add_argument("--limit", type=int)
     args = parser.parse_args(argv)
 
     package = build_reference_package()
@@ -231,6 +242,20 @@ def main(argv: list[str] | None = None) -> int:
         ).inspect(args.model_id, args.source or args.model_id)
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0 if report.status == "available" else 2
+    if args.command == "tau2-dataset":
+        from .adapters.tau2 import Tau2RetailSourceAdapter
+        from .training.tau2_dataset import build_tau2_rollout_dataset
+
+        with Tau2RetailSourceAdapter().open_worker(args.checkout.resolve(), timeout_seconds=120) as client:
+            manifest = build_tau2_rollout_dataset(
+                client, args.output.resolve(), split=args.split,
+                experiment_id=args.experiment_id,
+                environment_hash=args.environment_hash, verifier_hash=args.verifier_hash,
+                policy_version=args.policy_version, checkpoint_id=args.checkpoint_id,
+                seeds=tuple(args.seeds or (0,)), limit=args.limit,
+            )
+        print(json.dumps(asdict(manifest), indent=2, sort_keys=True))
+        return 0
     if args.command == "platform-demo":
         from .platform.db import Database, PlatformRepository, serialize_experiment
         from .platform.execution import LocalExecutionProvider

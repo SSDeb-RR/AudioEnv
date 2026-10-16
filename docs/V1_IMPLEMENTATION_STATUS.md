@@ -112,6 +112,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   four-channel multimodal RoPE positions, then creates `TrajectoryV2` with
   exact audio-token spans and caller/agent audio lineage. This code remains
   CUDA-unverified.
+- `audioenv tau2-dataset` now compiles the pinned worker's official public
+  train or test membership into canonical, hash-bound VeRL JSONL plus a
+  manifest. Rows carry the exact environment, verifier, model, checkpoint,
+  policy, reward, seed, and split metadata required by the runtime without
+  copying the private user scenario. The Qwen worker and trainer require
+  different train and held-out validation files and reject accidental reuse.
 
 ## Partial
 
@@ -143,8 +149,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   implicit scripted fallback. The frozen caller, tau2 episode controller,
   live-policy runtime factory, and processor-derived trajectory finalizer are
   implemented and locally contract-tested. The complete loop has not yet run
-  inside the pinned CUDA worker, and its seed dataset still must supply all
-  hash-bound runtime metadata.
+  inside the pinned CUDA worker.
 - RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
   runtime/budget stops, reconnect, and SFTP command construction. Live API,
   SSH event streaming, and artifact collection are not verified.
@@ -172,7 +177,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-97 passed
+99 passed
 
 uv run audioenv validate
 389 passed, 0 failed

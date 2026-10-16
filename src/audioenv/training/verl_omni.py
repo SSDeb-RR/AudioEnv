@@ -22,6 +22,7 @@ class VerlOmniConfig:
     checkout: Path
     model_path: Path
     dataset_path: Path
+    validation_dataset_path: Path
     output_dir: Path
     environment_manifest: Path | None = None
     caller_model_path: Path | None = None
@@ -78,6 +79,10 @@ class _VerlOmniTrainer:
             errors.append("Qwen3-Omni model path does not exist")
         if not config.dataset_path.is_file():
             errors.append("rollout seed dataset does not exist")
+        if not config.validation_dataset_path.is_file():
+            errors.append("held-out validation dataset does not exist")
+        elif config.validation_dataset_path.resolve() == config.dataset_path.resolve():
+            errors.append("training and held-out validation datasets must be different files")
         if config.environment_manifest is not None and not config.environment_manifest.is_file():
             errors.append("AudioEnv environment manifest does not exist")
         if config.caller_model_path is not None and not config.caller_model_path.exists():
@@ -120,7 +125,7 @@ class _VerlOmniTrainer:
         command = [
             "python3", "-m", "verl_omni.trainer.main_omni",
             f"data.train_files={config.dataset_path.resolve()}",
-            f"data.val_files={config.dataset_path.resolve()}",
+            f"data.val_files={config.validation_dataset_path.resolve()}",
             "data.truncation=error",
             "data.filter_overlong_prompts=true",
             f"actor_rollout_ref.model.path={config.model_path.resolve()}",

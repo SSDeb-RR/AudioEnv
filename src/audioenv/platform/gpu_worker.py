@@ -120,6 +120,7 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
         checkout=Path(experiment.verl_checkout or ""), model_path=Path(experiment.model_path or ""),
         caller_model_path=Path(experiment.caller_model_path or ""),
         dataset_path=Path(experiment.rollout_dataset_path or ""),
+        validation_dataset_path=Path(experiment.validation_dataset_path or ""),
         environment_manifest=Path(experiment.environment_manifest or ""), output_dir=output,
         algorithm=experiment.algorithm, nodes=int(hp.get("nodes", 1)),
         gpus_per_node=int(hp.get("gpus_per_node", 4)),

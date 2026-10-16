@@ -38,12 +38,14 @@ def _experiment(tmp_path):
     required = tmp_path / "required"
     required.mkdir()
     data = tmp_path / "rollouts.parquet"; data.write_bytes(b"data")
+    validation = tmp_path / "validation.parquet"; validation.write_bytes(b"data")
     manifest = tmp_path / "env.json"; manifest.write_text("{}")
     return GPUWorkerExperimentV1(
         experiment_id="exp-1", run_name="qwen-proof", backend="qwen3-omni-verl",
         trainer="qwen3-omni-thinker-gspo-lora", algorithm="gspo",
         environment_manifest=str(manifest), model_path=str(required), caller_model_path=str(required),
-        rollout_dataset_path=str(data), verl_checkout=str(required), tau2_checkout=str(required),
+        rollout_dataset_path=str(data), validation_dataset_path=str(validation),
+        verl_checkout=str(required), tau2_checkout=str(required),
         output_dir="/workspace/runs/exp-1/output",
     )
 

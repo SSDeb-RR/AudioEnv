@@ -171,6 +171,23 @@ artifacts, policy versions, and episode boundaries are validated together.
 `TrajectoryV2` adds explicit multimodal feature spans, audio lineage, separate
 terminal/process reward provenance, and grouped-rollout validation.
 
+Pinned tau2 tasks can be compiled into public, hash-bound VeRL inputs without
+including the private caller scenario:
+
+```bash
+audioenv tau2-dataset \
+  --checkout /path/to/pinned/tau2 \
+  --output train.jsonl \
+  --split train \
+  --experiment-id EXPERIMENT_ID \
+  --environment-hash ENVIRONMENT_SHA256 \
+  --verifier-hash VERIFIER_SHA256 \
+  --policy-version POLICY_VERSION
+```
+
+Generate the held-out `test` file separately. Qwen training preflight rejects
+configurations that reuse the training file as validation data.
+
 `Qwen3OmniAgentAdapter` and `Qwen3OmniCallerAdapter` use the upstream
 Transformers processor/model interfaces, preserve semantic-token/Talker-audio
 binding, and parse constrained structured tool envelopes. Their `probe()` does
