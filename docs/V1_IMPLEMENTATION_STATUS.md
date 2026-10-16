@@ -183,6 +183,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   process penalties, including a stronger penalty for identical repeated
   failures; protected terminal verification is unchanged and private worker
   errors are not exposed to the policy.
+- The immutable worker now binds all trainer and caller CUDA ordinals to the
+  attested physical inventory and rejects missing or sub-80-GB devices before
+  model loading, closing a case where a four-GPU host could pass VeRL preflight
+  but fail when the separately allocated caller started.
 - The VeRL agent loop no longer supplies a precomputed reward score, which
   would cause upstream batching to bypass the configured scorer. Protected
   terminal/process results and the immutable verifier hash now flow through

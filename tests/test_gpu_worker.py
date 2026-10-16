@@ -83,6 +83,15 @@ def test_qwen_gpu_allocation_is_explicit_and_disjoint():
         })
 
 
+def test_qwen_gpu_allocation_binds_attested_inventory():
+    allocation = QwenGPUAllocation.from_hyperparameters({})
+    inventory = tuple("550.54, 81920" for _ in range(6))
+    assert allocation.validate_inventory(inventory) == ()
+    assert "do not exist: 4,5" in allocation.validate_inventory(inventory[:4])[0]
+    undersized = (*inventory[:5], "550.54, 49152")
+    assert "below the 80 GB" in allocation.validate_inventory(undersized)[0]
+
+
 class _Discovery:
     def discover(self):
         return {"tasks": [

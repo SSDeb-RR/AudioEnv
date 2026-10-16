@@ -84,6 +84,9 @@ full-duplex streaming, or closed-model RL.
   penalty instead of crashing or silently discarding the rollout.
 - A provider-neutral `audioenv-gpu-worker` bundle/event/artifact contract used
   by the verified local training backend and the CUDA-gated Qwen backend.
+- GPU worker preflight binds every configured trainer and frozen-caller CUDA
+  ordinal to the attested NVIDIA inventory and rejects missing or sub-80-GB
+  devices before either checkpoint starts loading.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
   while building or attesting the GPU worker runtime.

@@ -122,6 +122,12 @@ the experiment to its terminal state, and stops compute. The dashboard exposes
 the same quote, exact-name confirmation, synchronization, and cancellation
 workflow without treating mocked transport acceptance as real GPU acceptance.
 
+Before model startup, the worker validates the disjoint trainer/caller CUDA
+allocation against the attested `nvidia-smi` inventory. Every selected ordinal
+must exist and report approximately 80 GB of memory; a four-GPU host therefore
+cannot accidentally pass trainer preflight when the caller is assigned GPUs
+4 and 5.
+
 ## Image build policy
 
 [`docker/gpu-worker/Dockerfile`](../docker/gpu-worker/Dockerfile) has no default

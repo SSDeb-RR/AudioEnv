@@ -153,6 +153,9 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
     if not estimate.available:
         raise RuntimeError("Qwen trainer preflight failed: " + "; ".join(estimate.reasons))
     allocation = QwenGPUAllocation.from_hyperparameters(hp)
+    allocation_errors = allocation.validate_inventory(runtime.evidence.get("nvidia_smi", ()))
+    if allocation_errors:
+        raise RuntimeError("Qwen GPU allocation failed: " + "; ".join(allocation_errors))
     caller_port = int(hp.get("caller_port", 8788))
     caller_url = f"http://127.0.0.1:{caller_port}"
     caller_stdout = (output / "caller.stdout.log").open("w", encoding="utf-8")
@@ -258,6 +261,35 @@ class QwenGPUAllocation:
     @property
     def caller(self) -> str:
         return ",".join(str(item) for item in self.caller_devices)
+
+    def validate_inventory(self, rows: object) -> tuple[str, ...]:
+        """Bind configured CUDA ordinals to the attested physical inventory."""
+
+        if not isinstance(rows, (list, tuple)) or not rows:
+            return ("attested NVIDIA GPU inventory is unavailable",)
+        memory_mb: list[int] = []
+        for row in rows:
+            try:
+                memory_mb.append(int(str(row).rsplit(",", 1)[-1].strip()))
+            except ValueError:
+                return ("attested NVIDIA GPU inventory has an invalid memory value",)
+        selected = (*self.trainer_devices, *self.caller_devices)
+        missing = tuple(device for device in selected if device >= len(memory_mb))
+        errors: list[str] = []
+        if missing:
+            errors.append(
+                "configured CUDA devices do not exist: " + ",".join(str(item) for item in missing)
+            )
+        undersized = tuple(
+            device for device in selected
+            if device < len(memory_mb) and memory_mb[device] < 79_000
+        )
+        if undersized:
+            errors.append(
+                "configured CUDA devices below the 80 GB class requirement: "
+                + ",".join(str(item) for item in undersized)
+            )
+        return tuple(errors)
 
     @classmethod
     def from_hyperparameters(cls, values: dict[str, Any]) -> "QwenGPUAllocation":
