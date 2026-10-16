@@ -72,6 +72,11 @@ VeRL would create `rm_scores` immediately and skip the configured reward
 manager. The protected result and expected verifier hash travel as tool-extra
 fields, and VeRL's reward loop must invoke `compute_audioenv_score` before a
 training reward exists.
+The immutable-image contract command enables and verifies all four runtime
+patches during the build: native Thinker/Talker output binding, trajectory
+postprocessing, LoRA-gradient auditing, and rollout/training log-probability
+parity. An upstream method move or inactive patch therefore fails the image
+build before GPU provisioning.
 The pinned native-audio bridge retains stage-0 Thinker tokens/log-probabilities
 and the stage-2 Code2Wav waveform from the same vLLM-Omni request. It fails
 closed if either output is absent, preventing an unrelated TTS waveform from

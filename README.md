@@ -105,7 +105,8 @@ full-duplex streaming, or closed-model RL.
   against its content-addressed ID and rejects corruption.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
-  while building or attesting the GPU worker runtime.
+  plus actual installation of all four runtime patches while building the GPU
+  worker image.
 - The VeRL postprocessor is actually patched to finalize and persist each
   native rollout with processor-derived multimodal positions; an installation
   regression test guards this runtime hook rather than testing only the

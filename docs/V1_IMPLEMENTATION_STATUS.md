@@ -332,6 +332,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   its evidence; any upstream API drift fails before model loading or training.
   The two pinned repositories were also inspected at their recorded commits,
   but the image-level command still awaits a real Docker/CUDA image build.
+- That image-build command now forces native integration mode and verifies the
+  active markers for Thinker/Talker output binding, trajectory finalization,
+  LoRA-gradient auditing, and log-probability parity. Missing or drifted patch
+  points fail the image build rather than surviving a shallow import check.
 - The release image wrapper now verifies that the wheel metadata matches the
   dependency lock, sources every upstream build argument from that lock,
   attaches wheel/lock SHA-256 labels, and emits a versioned receipt containing
@@ -373,7 +377,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-169 passed
+170 passed
 
 uv run audioenv validate
 389 passed, 0 failed

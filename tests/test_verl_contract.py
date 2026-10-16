@@ -19,7 +19,19 @@ class _RewardManager:
     pass
 
 
-def _runtime(*, missing: str | None = None, register: bool = True):
+class _NativeServer:
+    pass
+
+
+class _FSDPEngine:
+    pass
+
+
+class _PPOTrainer:
+    pass
+
+
+def _runtime(*, missing: str | None = None, register: bool = True, bridges: bool = False):
     fields = dict(_Output.model_fields)
     if missing:
         fields.pop(missing)
@@ -37,9 +49,20 @@ def _runtime(*, missing: str | None = None, register: bool = True):
         if name == "audioenv.training.verl_plugin":
             if register:
                 registry["audioenv_agent"] = {"_target_": "audioenv.training.verl_plugin.AudioEnvVerlAgentLoop"}
+            if bridges:
+                _Manager._audioenv_trajectory_bridge = True
+                _NativeServer._audioenv_native_bridge = True
+                _FSDPEngine._audioenv_gradient_audit = True
+                _PPOTrainer._audioenv_logprob_audit = True
             return SimpleNamespace()
         if name == "verl.experimental.reward_loop.reward_manager":
             return rewards
+        if name == "verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server":
+            return SimpleNamespace(VLLMOmniAsyncServer=_NativeServer)
+        if name == "verl.workers.engine.fsdp.transformer_impl":
+            return SimpleNamespace(FSDPEngine=_FSDPEngine)
+        if name == "verl.trainer.ppo.v1.trainer_base":
+            return SimpleNamespace(PPOTrainer=_PPOTrainer)
         raise AssertionError(name)
 
     return importer
@@ -64,4 +87,20 @@ def test_verl_contract_fails_on_upstream_field_or_registration_drift():
         validate_verl_runtime_contract(
             importer=_runtime(register=False),
             object_loader=lambda _path, _name: compute_audioenv_score,
+        )
+
+
+def test_verl_contract_requires_all_training_runtime_bridges_when_requested():
+    report = validate_verl_runtime_contract(
+        importer=_runtime(bridges=True),
+        object_loader=lambda _path, _name: compute_audioenv_score,
+        require_runtime_bridges=True,
+    )
+    assert all(report["runtime_bridges"].values())
+    _PPOTrainer._audioenv_logprob_audit = False
+    with pytest.raises(RuntimeError, match="logprob_parity_audit"):
+        validate_verl_runtime_contract(
+            importer=_runtime(bridges=False),
+            object_loader=lambda _path, _name: compute_audioenv_score,
+            require_runtime_bridges=True,
         )
