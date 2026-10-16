@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+from datetime import UTC, datetime
 from hashlib import sha256
 import json
 import os
@@ -1111,8 +1112,12 @@ def create_app(
         snapshot = json.loads(resource.config_json)
         if "worker_launch" not in snapshot:
             raise HTTPException(409, "GPU worker has not launched")
-        from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
+        from .runpod import RunPodConfig, RunPodQuote, RunPodRESTV2Transport, RunPodSecureCloudProvider
         runpod_config = RunPodConfig(**snapshot["config"])
+        reviewed_quote = (
+            RunPodQuote(**snapshot["quote"])
+            if "quote" in snapshot else None
+        )
         provider = RunPodSecureCloudProvider(
             app.state.runpod_transport
             or RunPodRESTV2Transport(api_key_env=runpod_config.api_key_secret_name)
@@ -1120,6 +1125,36 @@ def create_app(
         try:
             pod = provider.reconnect(resource.external_id)
             executor = _resolve_runpod_executor(app, pod, runpod_config, snapshot)
+            elapsed_hours = _elapsed_provider_hours(snapshot, resource.created_at)
+            stopped = (
+                provider.enforce_limits(
+                    resource.external_id, runpod_config, reviewed_quote,
+                    elapsed_hours=elapsed_hours,
+                )
+                if reviewed_quote is not None else None
+            )
+            if stopped is not None:
+                if executor is not None:
+                    try:
+                        provider.request_cancellation(executor, experiment_id)
+                    except Exception:
+                        pass
+                reason = "RunPod maximum runtime or budget reached"
+                snapshot["limit_stop"] = {
+                    "reason": reason, "elapsed_hours": elapsed_hours,
+                    "stopped_at": datetime.now(UTC).isoformat(),
+                }
+                _advance_gpu_terminal(repository, experiment_id, "cancelled", {"reason": reason})
+                resource = repository.update_compute_resource(
+                    resource.id, status="cancelled", config=snapshot,
+                )
+                repository.add_log(experiment_id, reason, level="warning", payload={
+                    "resource_id": resource.id, "elapsed_hours": elapsed_hours,
+                })
+                return {
+                    "resource": _compute_resource(resource), "events_synced": 0,
+                    "artifact_ids": [],
+                }
             if executor is None:
                 raise RuntimeError("SSH endpoint or key/known-host references are unavailable")
             after = int(snapshot.get("synced_event_sequence", 0))
@@ -1751,8 +1786,9 @@ def _launch_runpod(app, repository: PlatformRepository, record, quote_id, confir
         external_id = str(pod.get("id", ""))
         if not external_id:
             raise RuntimeError("RunPod create response did not include a Pod id")
+        snapshot["provisioned_at"] = datetime.now(UTC).isoformat()
         resource = repository.update_compute_resource(
-            resource.id, status="provisioning", external_id=external_id,
+            resource.id, status="provisioning", external_id=external_id, config=snapshot,
         )
         remote_status = str(pod.get("status", pod.get("desiredStatus", ""))).lower()
         if remote_status == "running":
@@ -2118,6 +2154,7 @@ def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirm
             raise RuntimeError("Modal create response did not include a Sandbox id")
         created_sandbox_id = external_id
         snapshot["worker_launch"] = {"experiment_path": staged_path}
+        snapshot["provisioned_at"] = datetime.now(UTC).isoformat()
         resource = repository.update_compute_resource(
             resource.id, status="running", external_id=external_id, config=snapshot,
         )
@@ -2161,10 +2198,32 @@ def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirm
 
 def _sync_modal_resource(app, repository: PlatformRepository, record, resource) -> dict[str, Any]:
     snapshot = json.loads(resource.config_json)
-    from .modal import ModalConfig
+    from .modal import ModalConfig, ModalQuote
     config = ModalConfig(**snapshot["config"])
+    quote = ModalQuote(**snapshot["quote"])
     provider = _modal_provider(app, snapshot)
     try:
+        elapsed_hours = _elapsed_provider_hours(snapshot, resource.created_at)
+        stopped = provider.enforce_limits(
+            resource.external_id, config, quote, elapsed_hours=elapsed_hours,
+        )
+        if stopped is not None:
+            reason = "Modal maximum runtime or budget reached"
+            snapshot["limit_stop"] = {
+                "reason": reason, "elapsed_hours": elapsed_hours,
+                "stopped_at": datetime.now(UTC).isoformat(),
+            }
+            _advance_gpu_terminal(repository, record.id, "cancelled", {"reason": reason})
+            resource = repository.update_compute_resource(
+                resource.id, status="cancelled", config=snapshot,
+            )
+            repository.add_log(record.id, reason, level="warning", payload={
+                "resource_id": resource.id, "elapsed_hours": elapsed_hours,
+            })
+            return {
+                "resource": _compute_resource(resource), "events_synced": 0,
+                "artifact_ids": [],
+            }
         after = int(snapshot.get("synced_event_sequence", 0))
         events = provider.stream_events(
             resource.external_id, experiment_id=record.id, after_sequence=after,
@@ -2212,6 +2271,17 @@ def _sync_modal_resource(app, repository: PlatformRepository, record, resource) 
     except Exception as exc:
         raise HTTPException(502, f"Modal synchronization failed: {exc}") from exc
     return {"resource": _compute_resource(resource), "events_synced": len(events), "artifact_ids": artifacts}
+
+
+def _elapsed_provider_hours(snapshot: dict[str, Any], fallback: datetime) -> float:
+    value = snapshot.get("provisioned_at")
+    try:
+        started = datetime.fromisoformat(str(value)) if value else fallback
+    except ValueError:
+        started = fallback
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return max(0.0, (datetime.now(UTC) - started.astimezone(UTC)).total_seconds() / 3600)
 
 
 _SECRET_VALUE_MARKERS = (

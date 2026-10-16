@@ -227,10 +227,11 @@ def test_runpod_stages_local_small_inputs_and_requires_remote_large_resources(tm
 def test_runpod_quote_review_and_exact_confirmation_are_persisted_product_flow(tmp_path):
     transport = FakeTransport()
     remote = FakeRemote()
-    client = TestClient(create_app(
+    app = create_app(
         f"sqlite:///{tmp_path / 'product.sqlite'}", runpod_transport=transport,
         runpod_executor_factory=lambda _pod, _config: remote,
-    ))
+    )
+    client = TestClient(app)
     project = client.get("/api/projects").json()[0]
     environment = client.get("/api/environments").json()[0]
     model_id = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -315,9 +316,17 @@ def test_runpod_quote_review_and_exact_confirmation_are_persisted_product_flow(t
     assert synced.json()["events_synced"] == 2
     assert client.get(f"/api/experiments/{experiment_id}/metrics").json()[0]["value"] == 0.5
     assert client.get(f"/api/experiments/{experiment_id}").json()["status"] == "running"
-    cancelled = client.post(f"/api/experiments/{experiment_id}/cancel")
-    assert cancelled.status_code == 200
-    assert cancelled.json()["status"] == "cancelled"
+    resource = app.state.repository.get_compute_resource(quote["id"])
+    snapshot = json.loads(resource.config_json)
+    snapshot["provisioned_at"] = "2000-01-01T00:00:00+00:00"
+    app.state.repository.update_compute_resource(resource.id, status="running", config=snapshot)
+    limited = client.post(
+        f"/api/experiments/{experiment_id}/compute-resources/{quote['id']}/sync",
+    )
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["resource"]["status"] == "cancelled"
+    assert client.get(f"/api/experiments/{experiment_id}").json()["status"] == "cancelled"
+    assert f"/workspace/runs/{experiment_id}/cancel.requested" in remote.files
     assert transport.stopped == ["pod-1"]
 
 

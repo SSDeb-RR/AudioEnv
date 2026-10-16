@@ -389,6 +389,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   `maxCount.secure`, and `price.secure` fields. Provisioning sends only valid
   v2 create fields; maximum runtime and budget are enforced by AudioEnv's
   persisted watchdog because the v2 create schema has no `stopAfterSeconds`.
+  Every persisted-resource sync computes elapsed time from the recorded
+  provisioning timestamp, attempts the worker cancellation sentinel, stops the
+  Pod when either limit is reached, and records a cancelled experiment and
+  compute resource. Legacy resource records without a reviewed quote remain
+  readable but cannot retroactively reconstruct a trustworthy spend limit.
   Reconnect recognizes the v2 `PROVISIONING`, `STARTING`, `RUNNING`, `EXITED`,
   and `ERROR` states and resolves SSH from the nested `ssh.direct` or
   `ssh.proxy` response before falling back to legacy flat fields.
@@ -399,8 +404,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   Pod SSH endpoint, container image, and paid execution are not verified.
 - Modal has a concrete optional SDK transport and a persisted dashboard/API
   workflow. Modal does not provide a live market-price quote through this
-  integration, so its UI labels the configured rate as an estimate. An
-  external paid Sandbox acceptance job has not run.
+  integration, so its UI labels the configured rate as an estimate. Its
+  persisted-resource sync now invokes the same elapsed-runtime and accrued-cost
+  watchdog, terminates the Sandbox, and records cancellation at the configured
+  limit. An external paid Sandbox acceptance job has not run.
 
 ## Blocked
 

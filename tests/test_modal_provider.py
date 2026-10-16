@@ -167,9 +167,10 @@ def test_modal_sdk_transport_maps_official_sdk_boundaries_without_network():
 
 def test_modal_quote_launch_sync_and_cancel_are_persisted_product_flow(tmp_path):
     transport = _Transport()
-    client = TestClient(create_app(
+    app = create_app(
         f"sqlite:///{tmp_path / 'modal.sqlite'}", modal_transport=transport,
-    ))
+    )
+    client = TestClient(app)
     project = client.get("/api/projects").json()[0]
     environment = client.get("/api/environments").json()[0]
     model_id = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -227,6 +228,14 @@ def test_modal_quote_launch_sync_and_cancel_are_persisted_product_flow(tmp_path)
     )
     assert synced.status_code == 200, synced.text
     assert client.get(f"/api/experiments/{experiment['id']}/metrics").json()[0]["value"] == 0.25
-    cancelled = client.post(f"/api/experiments/{experiment['id']}/cancel")
-    assert cancelled.status_code == 200
+    resource = app.state.repository.get_compute_resource(quote["id"])
+    snapshot = json.loads(resource.config_json)
+    snapshot["provisioned_at"] = "2000-01-01T00:00:00+00:00"
+    app.state.repository.update_compute_resource(resource.id, status="running", config=snapshot)
+    limited = client.post(
+        f"/api/experiments/{experiment['id']}/compute-resources/{quote['id']}/sync",
+    )
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["resource"]["status"] == "cancelled"
+    assert client.get(f"/api/experiments/{experiment['id']}").json()["status"] == "cancelled"
     assert transport.terminated == ["sb-1"]
