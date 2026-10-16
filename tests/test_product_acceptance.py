@@ -61,7 +61,10 @@ class FakeRunPod:
 def test_runpod_requires_typed_confirmation_and_enforces_budget():
     transport = FakeRunPod()
     provider = RunPodSecureCloudProvider(transport)
-    config = RunPodConfig(run_name="gpu-gate", max_runtime_hours=4, max_total_budget_usd=100)
+    config = RunPodConfig(
+        run_name="gpu-gate", image_digest="sha256:" + "a" * 64,
+        max_runtime_hours=4, max_total_budget_usd=100,
+    )
     quote = provider.quote(config)
     assert quote.available and quote.maximum_cost_usd == 64
     try:

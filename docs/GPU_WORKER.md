@@ -79,6 +79,28 @@ The worker hashes every output file into `worker-artifacts.json`. Cloud
 providers collect this manifest and its referenced files; the control plane
 registers them by content hash.
 
+## RunPod transport lifecycle
+
+The RunPod provider requires an immutable worker-image digest, a fresh live
+quote, budget/runtime caps, and an exact typed run-name confirmation before it
+can call the provisioning transport. After a Pod exists, the strict-host-key
+OpenSSH transport performs the provider-neutral lifecycle:
+
+1. upload the validated experiment plus small manifest/dataset inputs under
+   `/workspace/runs/<experiment-id>`;
+2. require model weights and large source checkouts to be pre-positioned under
+   `/workspace` or the preserved `/runpod-volume` mount;
+3. launch `audioenv-gpu-worker` under `nohup`, persist its PID/exit status, and
+   replay contiguous typed events after control-plane reconnects;
+4. request safe-boundary cancellation through the experiment sentinel;
+5. download only safe manifest paths and verify every size and SHA-256 digest;
+6. stop Pod compute on completion, failure, cancellation, or enforced limits,
+   without deleting the separately managed network volume.
+
+This lifecycle is covered by local transport tests. The REST and SSH paths
+have not contacted RunPod, and no live Pod has been provisioned. Consequently
+the provider remains integration-ready rather than GPU-accepted.
+
 ## Image build policy
 
 [`docker/gpu-worker/Dockerfile`](../docker/gpu-worker/Dockerfile) has no default

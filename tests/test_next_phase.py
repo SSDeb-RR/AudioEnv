@@ -408,7 +408,10 @@ def test_gpu_plans_are_guarded_and_never_provision_without_exact_confirmation(tm
     command = LocalCUDAExecutionProvider.docker_command(plan, data_dir=tmp_path, command=("train",))
     assert "--read-only" in command and "--cap-drop=ALL" in command
     transport = _RunPodTransport(); provider = RunPodSecureCloudProvider(transport)
-    config = RunPodConfig(run_name="paid-proof", max_runtime_hours=2, max_total_budget_usd=40)
+    config = RunPodConfig(
+        run_name="paid-proof", image_digest="sha256:" + "a" * 64,
+        max_runtime_hours=2, max_total_budget_usd=40,
+    )
     quote = provider.quote(config)
     assert quote.maximum_cost_usd == 32
     with pytest.raises(ValueError, match="exactly match"):

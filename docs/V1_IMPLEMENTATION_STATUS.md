@@ -46,9 +46,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   pipeline, sampling, or seeds and reports a paired bootstrap interval.
 - Checkpoint and manifest downloads resolve by content-addressed artifact ID;
   arbitrary paths are not accepted.
-- RunPod quote, typed-confirmation, provisioning, cancellation, and budget-stop
-  contracts are covered with a fake transport. Tests and startup never create
-  paid compute.
+- RunPod quote, typed-confirmation, provisioning, cancellation, budget-stop,
+  strict-host-key SSH launch, reconnectable event replay, cancellation
+  sentinel, immutable input staging, and hash-verified artifact recovery are
+  covered with fake transports. Large model/checkpoint and source directories
+  must be pre-positioned on the Pod workspace or persistent volume. Tests and
+  startup never create paid compute.
 - A Modal Sandbox provider uses the same immutable GPU-worker experiment and
   event contracts. It implements quote hashing, exact-name confirmation,
   gVisor runtime selection, named-secret references, volume staging,
@@ -179,9 +182,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   live-policy runtime factory, and processor-derived trajectory finalizer are
   implemented and locally contract-tested. The complete loop has not yet run
   inside the pinned CUDA worker.
-- RunPod has REST v2 quote/provision/state/stop methods, exact-name confirmation,
-  runtime/budget stops, reconnect, and SFTP command construction. Live API,
-  SSH event streaming, and artifact collection are not verified.
+- RunPod has REST v2 quote/provision/state/stop methods plus a concrete
+  strict-host-key SSH/SCP data plane for staging, detached worker launch,
+  reconnectable event replay, safe-boundary cancellation, and hash-verified
+  artifact collection. These paths are locally transport-tested; the live API,
+  Pod SSH endpoint, container image, and paid execution are not verified.
 - Modal has a fully tested control-plane contract but not a concrete live SDK
   transport or external Sandbox acceptance run.
 
@@ -206,7 +211,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-115 passed
+118 passed
 
 uv run audioenv validate
 389 passed, 0 failed
