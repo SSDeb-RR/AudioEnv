@@ -140,17 +140,43 @@ class Qwen3OmniAgentAdapter:
             if temporary_audio is not None:
                 temporary_audio.unlink(missing_ok=True)
         inputs = inputs.to(self._model.device).to(self._model.dtype)
-        text_ids, output_audio = self._model.generate(
-            **inputs, speaker=self.speaker, thinker_return_dict_in_generate=True,
-            output_scores=True, return_dict_in_generate=True, use_audio_in_video=True,
+
+        # Qwen3-Omni's public ``generate`` API returns the Thinker generation
+        # object only when audio rendering is disabled.  When the Talker is
+        # enabled it deliberately returns ``(sequences, waveform)`` and drops
+        # the Thinker scores.  Run the deterministic Thinker once to retain the
+        # policy scores, then render the same sequence through the frozen
+        # Talker and fail closed if the two Thinker passes ever diverge.  This
+        # is slower than the vLLM-Omni rollout path used for training, but it
+        # keeps this direct Transformers adapter truthful and aligned.
+        thinker_result = self._model.generate(
+            **inputs,
+            return_audio=False,
+            output_scores=True,
+            return_dict_in_generate=True,
+            use_audio_in_video=True,
         )
+        rendered_ids, output_audio = self._model.generate(
+            **inputs,
+            speaker=self.speaker,
+            return_audio=True,
+            use_audio_in_video=True,
+        )
+        if not hasattr(thinker_result, "sequences") or not hasattr(thinker_result, "scores"):
+            raise RuntimeError("Qwen Thinker did not return sequences and token scores")
+        sequences = thinker_result.sequences
+        if sequences.shape != rendered_ids.shape or not sequences.equal(rendered_ids):
+            raise RuntimeError("Qwen Thinker output changed between scored and rendered generation")
         prompt_length = int(inputs["input_ids"].shape[1])
-        sequences = text_ids.sequences
         generated = sequences[0, prompt_length:]
+        if not len(generated):
+            raise RuntimeError("Qwen Thinker generated no action tokens")
         decoded = self._processor.batch_decode(
             sequences[:, prompt_length:], skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
-        transition_scores = self._model.compute_transition_scores(sequences, text_ids.scores, normalize_logits=True)[0]
+        transition_scores = self._model.compute_transition_scores(
+            sequences, thinker_result.scores, normalize_logits=True
+        )[0]
         logprobs = tuple(float(value) for value in transition_scores[-len(generated) :].detach().cpu())
         audio_bytes = b""
         audio_id = None
