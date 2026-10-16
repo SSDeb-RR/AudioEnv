@@ -668,7 +668,7 @@ class GPUWorkerEventV1(FrozenModel):
     sequence: int = Field(ge=1)
     experiment_id: str
     type: Literal[
-        "worker.started", "preflight.completed", "training.started", "metric", "log", "service.started",
+        "worker.started", "preflight.completed", "training.started", "evaluation.started", "metric", "log", "service.started",
         "checkpoint.saved", "evaluation.completed", "artifact.manifest",
         "worker.cancelled", "worker.failed", "worker.completed",
     ]

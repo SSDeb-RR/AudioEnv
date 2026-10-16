@@ -37,9 +37,13 @@ def build_tau2_rollout_dataset(
     reward_version: str = "tau2-official-v1",
     seeds: tuple[int, ...] = (0,),
     max_turns: int = 16,
+    audio_profile_id: str = "native-clean",
     limit: int | None = None,
 ) -> Tau2DatasetManifest:
     """Write canonical JSONL containing no caller goal or verifier truth."""
+
+    if audio_profile_id != "native-clean":
+        raise ValueError("tau2 Qwen datasets currently support only the implemented native-clean audio pipeline")
 
     for name, value in (("environment_hash", environment_hash), ("verifier_hash", verifier_hash)):
         if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
@@ -67,6 +71,7 @@ def build_tau2_rollout_dataset(
         "verifier_hash": verifier_hash, "policy_version": policy_version,
         "checkpoint_id": checkpoint_id, "model_id": model_id,
         "reward_version": reward_version, "max_turns": max_turns,
+        "audio_profile_id": audio_profile_id,
     }
     configuration_hash = _hash(configuration)
     rows = []
@@ -85,6 +90,7 @@ def build_tau2_rollout_dataset(
                 "policy_version": policy_version, "checkpoint_id": checkpoint_id,
                 "model_id": model_id, "reward_version": reward_version,
                 "max_turns": max_turns, "dataset_split": split,
+                "audio_profile_id": audio_profile_id,
                 "dataset_configuration_hash": configuration_hash,
             })
     payload = b"".join(

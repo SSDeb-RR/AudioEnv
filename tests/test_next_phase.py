@@ -270,6 +270,15 @@ def test_gspo_and_grpo_emit_distinct_real_loss_modes(tmp_path: Path, monkeypatch
     assert "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_mode=full" in gspo
     assert "actor_rollout_ref.rollout.agent.default_agent_loop=audioenv_agent" in gspo
     assert "reward.custom_reward_function.path=pkg://audioenv.training.verl_plugin" in gspo
+    assert "trainer.val_before_train=true" in gspo
+    assert "trainer.test_freq=1" in gspo
+    assert "trainer.save_freq=1" in gspo
+    checkpoint = base["output_dir"] / "global_step_1"; checkpoint.mkdir(parents=True)
+    reload_command = VerlOmniGSPOTrainer().reload_evaluation_command(
+        VerlOmniConfig(**base, algorithm="gspo"), checkpoint,
+    )
+    assert "trainer.val_only=true" in reload_command
+    assert f"trainer.resume_from_path={checkpoint.resolve()}" in reload_command
     assert f"data.train_files={data.resolve()}" in gspo
     assert f"data.val_files={validation.resolve()}" in gspo
 
@@ -286,9 +295,11 @@ def test_verl_reward_uses_only_hash_bound_protected_payload():
         "audioenv_trusted_reward": {
             "terminal": 1.0, "process": 0.25, "verifier_hash": "abc",
         },
+        "audioenv_rollout_draft": {"task_id": "task-1", "seed": 7, "audio_profile_id": "native-clean"},
     }
     result = compute_audioenv_score("audioenv/tau2-retail", "ignore me", {"fake": "gold"}, extra)
     assert result["score"] == 1.25
+    assert result["task_id"] == "task-1" and result["seed"] == 7
     bad = {**extra, "audioenv_verifier_hash": "different"}
     with pytest.raises(ValueError, match="verifier hash mismatch"):
         compute_audioenv_score("audioenv/tau2-retail", "", None, bad)

@@ -114,6 +114,7 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         "model_id": str(sample.get("model_id", "Qwen/Qwen3-Omni-30B-A3B-Instruct")),
         "checkpoint_id": str(sample.get("checkpoint_id", "base")),
         "reward_version": trusted["reward_version"],
+        "audio_profile_id": str(sample.get("audio_profile_id", "native-clean")),
         "terminal_reward": result.terminal_reward,
         "process_reward": 0.0,
         "audio_paths": audio_paths,

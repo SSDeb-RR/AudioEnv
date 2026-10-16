@@ -102,6 +102,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   terminal/process results and the immutable verifier hash now flow through
   tool-extra fields, forcing VeRL's reward loop to call AudioEnv's hash-bound
   `compute_audioenv_score` before `rm_scores` are created.
+- The Qwen worker now configures immutable held-out validation before training
+  and at the final optimizer step, requires a saved `global_step_` checkpoint,
+  launches a second validation-only VeRL process from that exact checkpoint,
+  and rejects post-reload outcome drift. It exports protocol-hashed baseline,
+  reloaded-trained, paired-comparison, and checkpoint-reload evidence. This is
+  contract-tested locally; real results remain CUDA-gated.
 - The Qwen rollout now selects vLLM-Omni's full Thinker → Talker → Code2Wav
   pipeline. A revision-pinned bridge retains the stage-0 policy tokens and
   log-probabilities plus the stage-2 waveform from the same generation request
@@ -192,7 +198,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-106 passed
+110 passed
 
 uv run audioenv validate
 389 passed, 0 failed

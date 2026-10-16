@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -34,6 +34,7 @@ class VerlOmniConfig:
     lora_alpha: int = 64
     group_size: int = 4
     max_steps: int = 1
+    evaluation_interval: int = 1
     resume_from: Path | None = None
 
     def online(self) -> OnlineRLTrainerConfigV1:
@@ -71,6 +72,8 @@ class _VerlOmniTrainer:
             errors.append("Qwen3-Omni Thinker LoRA requires at least 4 80GB GPUs")
         if config.nodes != 1:
             errors.append("the release-certified path is single-node")
+        if config.evaluation_interval < 1:
+            errors.append("evaluation_interval must be positive")
         if not config.checkout.is_dir():
             errors.append("VeRL-Omni checkout does not exist")
         elif _git_revision(config.checkout) != PINNED_VERL_OMNI_COMMIT:
@@ -164,10 +167,32 @@ class _VerlOmniTrainer:
             f"trainer.n_gpus_per_node={config.gpus_per_node}", f"trainer.nnodes={config.nodes}",
             f"trainer.total_training_steps={config.max_steps}",
             f"trainer.default_local_dir={config.output_dir.resolve()}",
-            "trainer.val_before_train=false",
+            "trainer.val_before_train=true",
+            f"trainer.test_freq={config.evaluation_interval}",
+            "trainer.save_freq=1",
+            f"trainer.validation_data_dir={(config.output_dir / 'validation' / 'training').resolve()}",
         ]
         if config.resume_from:
             command.extend(("trainer.resume_mode=resume_path", f"trainer.resume_from_path={config.resume_from.resolve()}"))
+        return tuple(command)
+
+    def reload_evaluation_command(self, config: VerlOmniConfig, checkpoint: Path) -> tuple[str, ...]:
+        """Reload one saved checkpoint and run held-out validation only."""
+
+        if not checkpoint.is_dir() or not checkpoint.name.startswith("global_step_"):
+            raise ValueError("reload evaluation requires a global_step_ checkpoint directory")
+        evaluation = replace(config, resume_from=checkpoint)
+        command = list(self.launch_command(evaluation, require_preflight=False))
+        replacements = {
+            "trainer.val_before_train": "true",
+            "trainer.test_freq": "-1",
+            "trainer.validation_data_dir": str((config.output_dir / "validation" / "reloaded").resolve()),
+        }
+        for key, value in replacements.items():
+            prefix = key + "="
+            command = [item for item in command if not item.startswith(prefix)]
+            command.append(prefix + value)
+        command.append("trainer.val_only=true")
         return tuple(command)
 
     def launch_environment(self, config: VerlOmniConfig) -> dict[str, str]:

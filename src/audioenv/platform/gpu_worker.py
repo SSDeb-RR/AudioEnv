@@ -28,6 +28,10 @@ from ..training import (
     TinyAudioPolicyTrainer, TinyTrainerConfig,
     VerlOmniConfig, VerlOmniGRPOTrainer, VerlOmniGSPOTrainer,
 )
+from ..training.qwen_evaluation import (
+    evaluation_from_verl_dump, evaluation_protocol_from_dataset, evaluation_sample_keys_from_dataset, newest_dump,
+    verify_reloaded_checkpoint, write_evaluation_bundle,
+)
 
 
 class EventWriter:
@@ -139,6 +143,7 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
         learning_rate=float(hp.get("learning_rate", 1e-6)),
         lora_rank=int(hp.get("lora_rank", 32)), lora_alpha=int(hp.get("lora_alpha", 64)),
         group_size=int(hp.get("group_size", 4)), max_steps=int(hp.get("max_steps", 1)),
+        evaluation_interval=int(hp.get("evaluation_interval", 1)),
         resume_from=Path(experiment.resume_from) if experiment.resume_from else None,
     )
     estimate = trainer.preflight(config)
@@ -184,11 +189,32 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
         if process.returncode:
             raise RuntimeError(f"VeRL-Omni exited with status {process.returncode}; inspect trainer logs")
         checkpoint = _latest_checkpoint(output)
-        if checkpoint is not None:
-            events.emit(
-                "checkpoint.saved", path=str(checkpoint), sha256=_hash_path(checkpoint),
-                reload_verified=False, reason="reload verification requires the evaluation gate",
+        if checkpoint is None:
+            raise RuntimeError("VeRL completed without a discoverable global_step_ checkpoint")
+        checkpoint_hash = _hash_path(checkpoint)
+        reload_command = trainer.reload_evaluation_command(config, checkpoint)
+        events.emit("evaluation.started", kind="checkpoint-reload", command=list(reload_command))
+        reload_process = subprocess.Popen(
+            reload_command, cwd=config.checkout, env=train_environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        reload_cancelled = _relay_trainer_process(
+            reload_process, caller, experiment, events,
+            stdout_path=output / "reload.stdout.log", stderr_path=output / "reload.stderr.log",
+        )
+        if reload_cancelled:
+            return 130
+        if reload_process.returncode:
+            raise RuntimeError(
+                f"VeRL checkpoint reload evaluation exited with status {reload_process.returncode}"
             )
+        _finalize_qwen_evaluations(
+            experiment, config, output, checkpoint_hash, runtime.evidence, events,
+        )
+        events.emit(
+            "checkpoint.saved", path=str(checkpoint), sha256=checkpoint_hash,
+            reload_verified=True,
+        )
         return 0
     finally:
         if caller.poll() is None:
@@ -350,9 +376,55 @@ def _stop_process(process: subprocess.Popen[Any]) -> None:
 def _latest_checkpoint(root: Path) -> Path | None:
     candidates = [
         item for item in root.rglob("*")
-        if item.name.startswith(("global_step_", "checkpoint_", "checkpoint-"))
+        if item.is_dir() and item.name.startswith("global_step_")
     ]
     return max(candidates, key=lambda item: item.stat().st_mtime_ns) if candidates else None
+
+
+def _finalize_qwen_evaluations(
+    experiment: GPUWorkerExperimentV1, config: VerlOmniConfig, output: Path,
+    checkpoint_hash: str, runtime_evidence: dict[str, Any], events: EventWriter,
+) -> None:
+    training_dir = output / "validation" / "training"
+    reload_dir = output / "validation" / "reloaded"
+    baseline_dump = training_dir / "0.jsonl"
+    trained_dump = newest_dump(training_dir, exclude_step=0)
+    reloaded_dump = newest_dump(reload_dir)
+    hp = experiment.hyperparameters
+    base_protocol = evaluation_protocol_from_dataset(
+        config.validation_dataset_path,
+        checkpoint_id=f"base:{runtime_evidence.get('model_revision')}",
+        caller_revision=str(runtime_evidence.get("caller_model_revision")),
+        caller_config={key: hp[key] for key in sorted(hp) if key.startswith("caller_")},
+        audio_pipeline={key: hp[key] for key in sorted(hp) if key.startswith("audio_")},
+        sampling={
+            "temperature": float(hp.get("evaluation_temperature", 0.0)),
+            "top_p": float(hp.get("evaluation_top_p", 1.0)),
+            "top_k": int(hp.get("evaluation_top_k", -1)),
+            "n": 1, "do_sample": False,
+        },
+    )
+    trained_protocol = base_protocol.model_copy(update={"checkpoint_id": checkpoint_hash})
+    expected_keys = evaluation_sample_keys_from_dataset(config.validation_dataset_path)
+    baseline = evaluation_from_verl_dump(baseline_dump, base_protocol, expected_keys=expected_keys)
+    before_reload = evaluation_from_verl_dump(trained_dump, trained_protocol, expected_keys=expected_keys)
+    trained = evaluation_from_verl_dump(reloaded_dump, trained_protocol, expected_keys=expected_keys)
+    reload_verified, reload_reasons = verify_reloaded_checkpoint(before_reload, trained)
+    if not reload_verified:
+        raise RuntimeError("checkpoint reload evaluation mismatch: " + "; ".join(reload_reasons))
+    paths = write_evaluation_bundle(
+        output / "evaluations", baseline, trained, reload_verified=True,
+        reload_reasons=(), checkpoint_sha256=checkpoint_hash,
+    )
+    comparison = json.loads(paths["comparison"].read_text(encoding="utf-8"))
+    events.emit(
+        "evaluation.completed", baseline_success_rate=baseline.success_rate,
+        trained_success_rate=trained.success_rate, paired_delta=comparison["paired_delta"],
+        compatibility_hash=comparison["compatibility_hash"],
+        baseline_protocol_hash=baseline.protocol.protocol_hash,
+        trained_protocol_hash=trained.protocol.protocol_hash,
+        reload_verified=True,
+    )
 
 
 def _hash_path(path: Path) -> str:

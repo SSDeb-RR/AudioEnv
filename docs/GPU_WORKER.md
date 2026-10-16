@@ -20,6 +20,14 @@ metric envelopes become `metric` events. The worker also persists an immutable
 experiment snapshot and content-hashes a discovered checkpoint. Checkpoint
 reload remains false until the separate evaluation gate verifies it.
 
+For the Qwen path, VeRL runs the protected test split before optimization and
+again at the final step. The worker then discovers the saved `global_step_`
+checkpoint and launches a separate `val_only` process using
+`resume_mode=resume_path`. It accepts the checkpoint only when the pre-reload
+and reloaded sample outcomes match. Baseline and reloaded-trained results are
+bound to identical environment, verifier, split-manifest, caller, audio,
+sampling, and seed hashes before a paired comparison is exported.
+
 The local CPU proof backend is executable on development machines. The
 `qwen3-omni-verl` backend performs two fail-closed preflights. Runtime
 attestation compares the experiment pins with the dependency receipt embedded

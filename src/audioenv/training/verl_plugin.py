@@ -56,7 +56,7 @@ def compute_audioenv_score(
     ground_truth: object,
     extra_info: dict[str, Any],
     **_: Any,
-) -> dict[str, float | str]:
+) -> dict[str, float | str | int]:
     """Return only the reward produced by AudioEnv's protected verifier.
 
     ``solution_str`` and ``ground_truth`` are deliberately ignored: a model may
@@ -77,11 +77,18 @@ def compute_audioenv_score(
     expected_hash = extra_info.get("audioenv_verifier_hash")
     if not verifier_hash or verifier_hash != expected_hash:
         raise ValueError("protected verifier hash mismatch")
+    draft = extra_info.get("audioenv_rollout_draft")
+    if not isinstance(draft, dict):
+        raise ValueError("missing protected rollout identity")
     return {
         "score": terminal_weight * terminal + process_weight * process,
         "terminal_reward": terminal,
         "process_reward": process,
         "data_source": str(data_source),
+        "task_id": str(draft.get("task_id", "")),
+        "seed": int(draft.get("seed", 0)),
+        "audio_profile_id": str(draft.get("audio_profile_id", "native-clean")),
+        "verifier_hash": str(verifier_hash),
     }
 
 
@@ -141,6 +148,10 @@ def trajectory_to_verl_payload(trajectory: TrajectoryV2) -> VerlAgentLoopPayload
                 "verifier_hash": trajectory.verifier_hash,
             },
             "audioenv_verifier_hash": trajectory.verifier_hash,
+            "audioenv_rollout_draft": {
+                "task_id": trajectory.task_id, "seed": trajectory.seed,
+                "audio_profile_id": str(trajectory.processor_config.get("audio_profile_id", "native-clean")),
+            },
             "audioenv_trajectory": trajectory.model_dump(mode="json"),
         },
     )
