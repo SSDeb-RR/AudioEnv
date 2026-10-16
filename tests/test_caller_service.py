@@ -56,6 +56,21 @@ def test_caller_manager_rejects_trainable_model():
         FrozenCallerSessionManager(caller)
 
 
+def test_frozen_caller_manager_seeds_every_isolated_turn(monkeypatch):
+    seeds = []
+    monkeypatch.setattr(
+        "audioenv.platform.caller_service._seed_frozen_inference",
+        lambda seed, turn: seeds.append((seed, turn)),
+    )
+    manager = FrozenCallerSessionManager(_FrozenCaller())
+    opened = manager.create("refund order A", 7)
+    manager.respond(opened["session_id"], b"agent audio")
+    assert seeds == [(7, 0), (7, 1)]
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        manager.create("refund order A", -1)
+
+
 def test_loopback_http_service_round_trip_and_ssrf_guard():
     manager = FrozenCallerSessionManager(_FrozenCaller())
     server = create_server(manager, "127.0.0.1", 0)

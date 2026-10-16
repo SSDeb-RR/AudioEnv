@@ -269,9 +269,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - The frozen Qwen caller now has a loopback-only service boundary with one
   model resident on its assigned GPU set and isolated conversation state for
   every rollout. Private goals remain inside the service, responses return
-  native WAV bytes, and the client refuses non-loopback URLs. The GPU worker
-  starts, health-checks, monitors, and stops this service separately from
-  VeRL, with disjoint caller and trainer GPU allocations.
+  native WAV bytes, and the client refuses non-loopback URLs. Inference is
+  serialized and reseeded from each episode seed plus caller turn, so
+  interleaving sessions cannot change one another's sampling sequence. The GPU
+  worker starts, health-checks, monitors, and stops this service separately
+  from VeRL, with disjoint caller and trainer GPU allocations.
 - A protected tau2 native-episode controller now routes the private scenario
   only to that caller service, passes only caller WAV and permitted tool
   results to the policy, executes strict structured tool/speech envelopes,
@@ -415,7 +417,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-177 passed
+178 passed
 
 uv run audioenv validate
 389 passed, 0 failed

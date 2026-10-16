@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import dataclass
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..models.qwen3_omni import Qwen3OmniCallerAdapter
 class _Session:
     history: list[dict[str, Any]]
     turn_index: int
+    seed: int
 
 
 class FrozenCallerSessionManager:
@@ -36,10 +38,13 @@ class FrozenCallerSessionManager:
     def create(self, private_goal: str, seed: int) -> dict[str, Any]:
         if not private_goal.strip():
             raise ValueError("private caller goal is required")
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ValueError("caller seed must be a non-negative integer")
         with self.lock:
+            _seed_frozen_inference(seed, 0)
             turn, history = self.adapter.start_isolated_session(private_goal, seed)
             session_id = str(uuid4())
-            self.sessions[session_id] = _Session(history=history, turn_index=turn.turn_index)
+            self.sessions[session_id] = _Session(history=history, turn_index=turn.turn_index, seed=seed)
         return {"session_id": session_id, **_turn_payload(turn)}
 
     def respond(self, session_id: str, agent_audio: bytes) -> dict[str, Any]:
@@ -49,8 +54,11 @@ class FrozenCallerSessionManager:
             session = self.sessions.get(session_id)
             if session is None:
                 raise KeyError("caller session not found")
+            _seed_frozen_inference(session.seed, session.turn_index + 1)
             turn, history = self.adapter.continue_isolated_session(session.history, agent_audio)
-            self.sessions[session_id] = _Session(history=history, turn_index=turn.turn_index)
+            self.sessions[session_id] = _Session(
+                history=history, turn_index=turn.turn_index, seed=session.seed,
+            )
         return _turn_payload(turn)
 
     def delete(self, session_id: str) -> bool:
@@ -106,7 +114,9 @@ def create_server(manager: FrozenCallerSessionManager, host: str, port: int) -> 
             try:
                 payload = self._payload()
                 if self.path == "/v1/sessions":
-                    result = manager.create(str(payload.get("private_goal") or ""), int(payload.get("seed", 0)))
+                    result = manager.create(
+                        str(payload.get("private_goal") or ""), payload.get("seed", 0),
+                    )
                 elif self.path.startswith("/v1/sessions/") and self.path.endswith("/respond"):
                     session_id = self.path.removeprefix("/v1/sessions/").removesuffix("/respond")
                     result = manager.respond(session_id, base64.b64decode(payload.get("agent_audio_base64") or "", validate=True))
@@ -154,6 +164,19 @@ def _turn_payload(turn) -> dict[str, Any]:
         "source": turn.source,
         "turn_index": turn.turn_index,
     }
+
+
+def _seed_frozen_inference(seed: int, turn_index: int) -> int:
+    """Set a session/turn-specific RNG state while inference is serialized."""
+
+    import torch
+
+    material = f"audioenv-frozen-caller:{seed}:{turn_index}".encode()
+    derived = int.from_bytes(sha256(material).digest()[:8], "big") % (2**63)
+    torch.manual_seed(derived)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(derived)
+    return derived
 
 
 def main(argv: list[str] | None = None) -> int:

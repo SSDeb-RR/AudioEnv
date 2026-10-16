@@ -99,6 +99,10 @@ utility decodes and resamples them into waveform arrays. Those exact arrays are
 used by both live rollout and VeRL's trainer-side multimodal reconstruction;
 path strings are never passed to the Qwen feature extractor as if they were
 waveforms.
+The frozen caller service serializes inference and derives a stable RNG seed
+from the episode seed and caller turn before every model invocation. Interleaved
+episodes therefore retain independent histories and independent sampling
+lineage instead of sharing process-global RNG order.
 
 This correct launch and reward boundary does not by itself prove the complete
 multi-turn Qwen caller/agent loop. That remains a GPU acceptance item until the
