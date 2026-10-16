@@ -546,6 +546,8 @@ class TrainingTurnV2(FrozenModel):
             raise ValueError("response mask must contain at least one trainable token")
         if not all(math.isfinite(value) for value in self.rollout_logprobs):
             raise ValueError("rollout log-probabilities must be finite")
+        if any(feature.end_token > total for feature in self.multimodal_features):
+            raise ValueError("multimodal feature span exceeds the policy sequence")
         return self
 
 

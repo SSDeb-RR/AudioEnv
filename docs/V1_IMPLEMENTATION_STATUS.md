@@ -324,6 +324,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   manager method is truly replaced exactly once; previously only the
   standalone finalizer was tested and unreachable installation statements
   left the real hook inactive.
+- Multi-turn finalization now resolves caller-audio spans across the complete
+  flattened prompt and masked response sequence. Later caller observations are
+  mask-zero context, but remain traceably bound to their audio artifacts;
+  feature spans that escape the policy sequence are rejected.
 - The immutable GPU image now runs `audioenv-verl-contract-check` after
   installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
   output fields, async postprocessor hook, `audioenv_agent` registration,
@@ -377,7 +381,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-170 passed
+171 passed
 
 uv run audioenv validate
 389 passed, 0 failed

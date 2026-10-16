@@ -83,7 +83,10 @@ def finalize_native_trajectory(
     if not audio:
         raise ValueError("native rollout draft has no audio lineage")
     caller_audio = tuple(item for item in audio if item.producer == "caller")
-    spans = _audio_spans(prompt_ids, audio_token_id, len(caller_audio))
+    # Later caller observations are flattened into response_ids with mask 0.
+    # Multimodal lineage therefore spans the complete unpadded policy sequence,
+    # not only the first-turn prompt.
+    spans = _audio_spans(prompt_ids + response_ids, audio_token_id, len(caller_audio))
     features = tuple(MultimodalFeatureRefV1(
         kind="audio", artifact_id=item.artifact_id, start_token=start, end_token=end,
     ) for item, (start, end) in zip(caller_audio, spans))

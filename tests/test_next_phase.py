@@ -45,13 +45,13 @@ from audioenv.training.verl_trajectory_bridge import (
 HEX = "a" * 64
 
 
-def _wav() -> bytes:
+def _wav(sample: bytes = b"\0\0") -> bytes:
     stream = io.BytesIO()
     with wave.open(stream, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(16_000)
-        wav.writeframes(b"\0\0" * 160)
+        wav.writeframes(sample * 160)
     return stream.getvalue()
 
 
@@ -410,6 +410,42 @@ def test_verl_postprocessing_finalizes_real_multichannel_positions(tmp_path: Pat
     assert trace.turns[0].response_mask == (1, 0, 1)
     assert trace.turns[0].multimodal_features[0].start_token == 0
     assert trace.turns[0].multimodal_features[0].end_token == 2
+
+
+def test_verl_finalizer_binds_later_caller_audio_in_masked_response(tmp_path: Path):
+    first = tmp_path / "caller-first.wav"
+    second = tmp_path / "caller-second.wav"
+    first.write_bytes(_wav())
+    second.write_bytes(_wav(b"\1\0"))
+    draft = {
+        "schema_version": "audioenv.native-rollout-draft/v1",
+        "experiment_id": "exp", "environment_hash": "a" * 64,
+        "verifier_hash": "b" * 64, "reward_version": "tau2-v1",
+        "task_id": "0", "episode_id": "episode", "seed": 7,
+        "model_id": "qwen", "checkpoint_id": "base", "policy_version": "p1",
+        "terminal_reward": 1.0, "process_reward": 0.0,
+        "truncated": False, "truncation_reason": None,
+        "audio_artifacts": [
+            {"path": str(first), "producer": "caller"},
+            {"path": str(second), "producer": "caller"},
+        ],
+        "actions": [{"kind": "speak"}, {"kind": "tool"}],
+    }
+    trace = finalize_native_trajectory(
+        draft=draft,
+        prompt_ids=(99, 99, 2),
+        # The second audio observation is an inserted, non-policy span.
+        response_ids=(3, 99, 99, 4, 5),
+        response_mask=(1, 0, 0, 0, 1),
+        response_logprobs=(-0.1, 0.0, 0.0, 0.0, -0.2),
+        padded_position_ids=tuple(range(8)),
+        prompt_width=3,
+        audio_token_id=99,
+    )
+    assert tuple(
+        (feature.start_token, feature.end_token)
+        for feature in trace.turns[0].multimodal_features
+    ) == ((0, 2), (4, 6))
 
 
 def test_verl_trajectory_finalize_bridge_really_installs_once():
