@@ -50,6 +50,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   run-scoped API verifies that hash before returning bounded records, and the
   dashboard displays actual actions, reward events, state hashes, latency, and
   terminal outcome. Tampered trace artifacts fail closed.
+- During GPU trainer and checkpoint-reload processes, the worker samples real
+  per-device utilization, used/total memory, and power through `nvidia-smi`
+  every five seconds. Missing NVIDIA tooling or malformed device rows produce
+  no metric rather than a fabricated zero. The run page shows persisted GPU
+  telemetry with its metric name and source, and labels unreported utilization,
+  memory, throughput, and measured cost as unavailable.
 - The VeRL postprocessor now persists each validated native `TrajectoryV2` to
   a per-process JSONL file only after Qwen processor positions and audio spans
   are bound. Local CUDA, RunPod, and Modal artifact import classify these files
@@ -333,7 +339,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-164 passed
+165 passed
 
 uv run audioenv validate
 389 passed, 0 failed

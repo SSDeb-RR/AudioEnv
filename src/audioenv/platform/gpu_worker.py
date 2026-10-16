@@ -344,8 +344,16 @@ def _relay_trainer_process(
         stderr_path: stderr_path.open("w", encoding="utf-8"),
     }
     cancelled = False
+    telemetry_sample = 0
+    next_telemetry = 0.0
     try:
         while selector.get_map():
+            now = time.monotonic()
+            if now >= next_telemetry:
+                for payload in _nvidia_telemetry(telemetry_sample):
+                    events.emit("metric", **payload)
+                telemetry_sample += 1
+                next_telemetry = now + 5.0
             if experiment.cancellation_file and Path(experiment.cancellation_file).exists():
                 cancelled = True
                 _stop_process(process)
@@ -386,6 +394,43 @@ def _relay_trainer_process(
         selector.close()
         for stream in streams.values():
             stream.close()
+
+
+def _nvidia_telemetry(
+    sample: int, *, runner: Any = subprocess.run,
+) -> tuple[dict[str, Any], ...]:
+    """Read real device telemetry, returning nothing when NVIDIA tooling is absent."""
+
+    command = (
+        "nvidia-smi",
+        "--query-gpu=index,utilization.gpu,memory.used,memory.total,power.draw",
+        "--format=csv,noheader,nounits",
+    )
+    try:
+        result = runner(command, capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if result.returncode:
+        return ()
+    metrics: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 5:
+            continue
+        try:
+            index = int(parts[0])
+            values = tuple(float(value) for value in parts[1:])
+        except ValueError:
+            continue
+        for name, value in zip(
+            ("utilization_percent", "memory_used_mb", "memory_total_mb", "power_watts"),
+            values, strict=True,
+        ):
+            metrics.append({
+                "step": sample, "name": f"gpu.{index}.{name}",
+                "value": value, "source": "nvidia-smi",
+            })
+    return tuple(metrics)
 
 
 def _structured_trainer_line(line: str) -> dict[str, Any] | None:

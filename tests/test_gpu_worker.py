@@ -221,6 +221,25 @@ def test_trainer_output_relay_persists_logs_and_emits_real_metrics(tmp_path: Pat
     assert _structured_trainer_line("not json") is None
 
 
+def test_nvidia_telemetry_emits_only_parsed_device_measurements():
+    from types import SimpleNamespace
+    from audioenv.platform.gpu_worker import _nvidia_telemetry
+
+    rows = _nvidia_telemetry(7, runner=lambda *args, **kwargs: SimpleNamespace(
+        returncode=0,
+        stdout="0, 83, 40123, 81559, 612.5\n1, unavailable, 200, 81559, 75\ninvalid\n",
+    ))
+    assert rows == (
+        {"step": 7, "name": "gpu.0.utilization_percent", "value": 83.0, "source": "nvidia-smi"},
+        {"step": 7, "name": "gpu.0.memory_used_mb", "value": 40123.0, "source": "nvidia-smi"},
+        {"step": 7, "name": "gpu.0.memory_total_mb", "value": 81559.0, "source": "nvidia-smi"},
+        {"step": 7, "name": "gpu.0.power_watts", "value": 612.5, "source": "nvidia-smi"},
+    )
+    assert _nvidia_telemetry(0, runner=lambda *args, **kwargs: SimpleNamespace(
+        returncode=1, stdout="",
+    )) == ()
+
+
 def test_checkpoint_discovery_and_tree_hash_are_deterministic(tmp_path: Path):
     checkpoint = tmp_path / "global_step_1"; checkpoint.mkdir()
     (checkpoint / "adapter.bin").write_bytes(b"weights")
