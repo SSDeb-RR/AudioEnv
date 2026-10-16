@@ -83,7 +83,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   per-task/audio-profile/seed outcomes. Aggregate claims are therefore
   traceable to all 24 held-out samples rather than only a headline percentage.
 - Checkpoint and manifest downloads resolve by content-addressed artifact ID;
-  arbitrary paths are not accepted.
+  arbitrary paths are not accepted. All artifact kinds are rehashed before
+  download, not only checkpoints and trajectories, so corrupted evaluation,
+  dependency, evidence, or export files fail closed.
+- The experiment export contains its immutable configuration hash, a stable
+  hash over the complete artifact manifest, SHA-256 artifact identities,
+  checkpoint lineage, and an explicit `complete`/`incomplete` status with
+  missing reproduction inputs. Large checkpoints remain individually
+  content-addressed instead of being synchronously duplicated into a ZIP.
 - RunPod quote, typed-confirmation, provisioning, cancellation, budget-stop,
   strict-host-key SSH launch, reconnectable event replay, cancellation
   sentinel, immutable input staging, and hash-verified artifact recovery are

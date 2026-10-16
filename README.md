@@ -99,6 +99,10 @@ full-duplex streaming, or closed-model RL.
   actually loaded, while GPU artifacts require a matching persisted worker
   reload event and a valid content hash. Missing or mismatched evidence fails
   closed instead of sending a VeRL adapter through the tiny-policy loader.
+- Reproducibility exports include the immutable experiment/config hash, a
+  deterministic artifact-manifest hash, checkpoint lineage, and explicit
+  missing-input diagnostics. Every artifact download rehashes the stored bytes
+  against its content-addressed ID and rejects corruption.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
   while building or attesting the GPU worker runtime.

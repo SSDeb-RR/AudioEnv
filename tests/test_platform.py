@@ -1,4 +1,5 @@
 from datetime import timedelta
+from hashlib import sha256
 import json
 from types import SimpleNamespace
 
@@ -320,6 +321,14 @@ def test_experiment_export_redacts_nested_secrets(tmp_path):
 
     assert payload["experiment"]["config"]["provider"]["api_token"] == "[REDACTED]"
     assert payload["experiment"]["config"]["secret_reference"] == "[REDACTED]"
+    assert payload["integrity"]["config_hash"] == experiment.config_hash
+    assert payload["integrity"]["artifact_manifest_sha256"] == sha256(b"[]").hexdigest()
+    assert payload["reproducibility"] == {
+        "status": "incomplete", "missing": ["experiment_not_completed"],
+        "checkpoint_lineage": {
+            "parent_experiment_id": None, "checkpoint_artifact_id": None,
+        },
+    }
     assert "do-not-export" not in path.read_text()
 
 

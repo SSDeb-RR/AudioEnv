@@ -804,6 +804,8 @@ def create_app(
         path = Path(row.path).resolve()
         if not path.is_file() or app.state.data_root not in path.parents:
             raise HTTPException(404, "artifact file unavailable")
+        if sha256(path.read_bytes()).hexdigest() != row.id:
+            raise HTTPException(409, "artifact failed content-hash verification")
         return FileResponse(path, media_type=row.media_type, filename=path.name)
 
     @app.get("/api/experiments/{experiment_id}/traces")

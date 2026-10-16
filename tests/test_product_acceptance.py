@@ -162,8 +162,14 @@ def test_api_launch_train_reload_compare_and_serve_spa(tmp_path):
     )
     exported = client.post(f"/api/experiments/{experiment['id']}/export", json={})
     assert exported.status_code == 201
-    assert client.get(exported.json()["download_url"]).status_code == 200
+    export_download = client.get(exported.json()["download_url"])
+    assert export_download.status_code == 200
+    export_payload = export_download.json()
+    assert export_payload["reproducibility"]["status"] == "complete"
+    assert export_payload["integrity"]["artifact_ids_are_sha256"] is True
+    assert export_payload["integrity"]["artifact_manifest_sha256"]
 
     trace_artifact = app.state.repository.get_artifact(traces["artifact_id"])
     Path(trace_artifact.path).write_bytes(b"tampered")
     assert client.get(f"/api/experiments/{experiment['id']}/traces").status_code == 409
+    assert client.get(f"/api/artifacts/{trace_artifact.id}/download").status_code == 409
