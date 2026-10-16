@@ -326,6 +326,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   its evidence; any upstream API drift fails before model loading or training.
   The two pinned repositories were also inspected at their recorded commits,
   but the image-level command still awaits a real Docker/CUDA image build.
+- The release image wrapper now verifies that the wheel metadata matches the
+  dependency lock, sources every upstream build argument from that lock,
+  attaches wheel/lock SHA-256 labels, and emits a versioned receipt containing
+  the immutable local Docker image ID and all release pins. Contract tests use
+  fake Docker and also reject wheel-version drift. A local image ID is not
+  misrepresented as a pushed registry digest; both the real CUDA build and
+  registry publication remain external gates.
 - RunPod has REST v2 quote/provision/state/stop methods plus a concrete
   strict-host-key SSH/SCP data plane for staging, detached worker launch,
   reconnectable event replay, safe-boundary cancellation, and hash-verified
@@ -360,7 +367,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-166 passed
+168 passed
 
 uv run audioenv validate
 389 passed, 0 failed

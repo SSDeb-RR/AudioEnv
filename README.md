@@ -106,6 +106,11 @@ full-duplex streaming, or closed-model RL.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
   while building or attesting the GPU worker runtime.
+- A release-image builder that rejects mutable CUDA bases and wheel/version
+  drift, derives upstream build arguments from the checked-in dependency lock,
+  labels the image with wheel/lock hashes, and emits a versioned immutable
+  local-image receipt. A registry digest and real CUDA build remain release
+  gates rather than inferred successes.
 
 The bundled WAV renderer generates deterministic audio fixtures for tests. It
 is not a speech synthesizer. A real deployment must inject a native-audio user

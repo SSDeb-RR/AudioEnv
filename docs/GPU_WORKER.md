@@ -138,11 +138,25 @@ digest, plus the built AudioEnv wheel:
 docker/gpu-worker/build.sh \
   'nvidia/cuda@sha256:<approved-digest>' \
   'dist/audioenv_foundry-<version>-py3-none-any.whl' \
-  'registry.example/audioenv-gpu:<release>'
+  'registry.example/audioenv-gpu:<release>' \
+  'dist/gpu-worker-image-receipt.json'
 ```
 
-The build wrapper rejects mutable base-image tags before Docker runs. The
-dependency receipt records the AudioEnv, Qwen checkpoint, VeRL-Omni, VeRL,
+The receipt path is optional and defaults to the path shown above. The build
+wrapper rejects mutable base-image tags before Docker runs, verifies the wheel's
+embedded version against the dependency lock, and passes every upstream commit
+to Docker from that lock rather than relying on Dockerfile defaults. It labels
+the image with the wheel and lock SHA-256 values, captures Docker's immutable
+local image ID, and writes all of those identities and release pins to the
+versioned JSON receipt. The wrapper is covered with a fake-Docker contract test;
+this host has not performed the CUDA image build.
+
+The local Docker image ID is a content identity for that local image, but it is
+not a pushed registry manifest digest. Publishing must separately record the
+registry-returned digest, and AudioEnv providers continue to require that
+digest-qualified image reference before a GPU launch.
+
+The dependency receipt records the AudioEnv, Qwen checkpoint, VeRL-Omni, VeRL,
 vLLM-Omni, tau2, and Repo2RLEnv revisions and is copied into the image at
 `/opt/audioenv/dependencies.lock.json`.
 The build also retains detached, commit-verified VeRL-Omni and tau2 source

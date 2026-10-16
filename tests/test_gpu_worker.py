@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -179,6 +181,100 @@ def test_gpu_image_builder_rejects_mutable_base_before_docker(tmp_path: Path):
     )
     assert result.returncode == 2
     assert "immutable sha256" in result.stderr
+
+
+def _write_test_wheel(path: Path, version: str) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            f"audioenv_foundry-{version}.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: audioenv-foundry\nVersion: {version}\n",
+        )
+
+
+def test_gpu_image_builder_binds_lock_wheel_and_image_id_in_receipt(tmp_path: Path):
+    root = Path(__file__).parents[1]
+    wheel = tmp_path / "audioenv_foundry-0.5.0-py3-none-any.whl"
+    _write_test_wheel(wheel, "0.5.0")
+    receipt = tmp_path / "image-receipt.json"
+    args_file = tmp_path / "docker-args.txt"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$@\" > \"$DOCKER_ARGS_FILE\"\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  if [[ $1 == --iidfile ]]; then\n"
+        "    shift\n"
+        "    printf 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\n' > \"$1\"\n"
+        "    exit 0\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "exit 3\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    result = subprocess.run(
+        [
+            str(root / "docker/gpu-worker/build.sh"),
+            f"nvidia/cuda@sha256:{'a' * 64}",
+            str(wheel),
+            "registry.example/audioenv-gpu:0.5.0",
+            str(receipt),
+        ],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_ARGS_FILE": str(args_file),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(receipt.read_text())
+    assert payload["schema_version"] == "audioenv.gpu-worker-image-receipt/v1"
+    assert payload["image"] == "registry.example/audioenv-gpu:0.5.0"
+    assert payload["image_id"] == f"sha256:{'d' * 64}"
+    assert payload["base_image"] == f"nvidia/cuda@sha256:{'a' * 64}"
+    assert payload["audioenv_version"] == "0.5.0"
+    assert payload["wheel_sha256"] == _hash_path(wheel)
+    assert payload["dependency_lock_sha256"] == _hash_path(
+        root / "docker/gpu-worker/dependencies.lock.json",
+    )
+    docker_args = args_file.read_text()
+    assert f"VERL_OMNI_COMMIT={payload['verl_omni_commit']}" in docker_args
+    assert f"VERL_COMMIT={payload['verl_commit']}" in docker_args
+    assert f"VLLM_OMNI_COMMIT={payload['vllm_omni_commit']}" in docker_args
+    assert f"TAU2_COMMIT={payload['tau2_commit']}" in docker_args
+    assert f"ai.audioenv.wheel-sha256={payload['wheel_sha256']}" in docker_args
+    assert (
+        f"ai.audioenv.dependency-lock-sha256={payload['dependency_lock_sha256']}"
+        in docker_args
+    )
+
+
+def test_gpu_image_builder_rejects_wheel_version_drift(tmp_path: Path):
+    root = Path(__file__).parents[1]
+    wheel = tmp_path / "audioenv_foundry-9.9.9-py3-none-any.whl"
+    _write_test_wheel(wheel, "9.9.9")
+    result = subprocess.run(
+        [
+            str(root / "docker/gpu-worker/build.sh"),
+            f"nvidia/cuda@sha256:{'a' * 64}",
+            str(wheel),
+            "audioenv:test",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "does not match dependency lock" in result.stderr
 
 
 def test_gpu_image_copies_dependency_receipt_and_installs_pinned_sources():
