@@ -119,6 +119,11 @@ def attest_qwen_runtime(
         if installed_audioenv != lock.get("audioenv_version"):
             reasons.append(f"installed AudioEnv version must equal {lock.get('audioenv_version')}")
         evidence["installed_packages"] = installed
+        try:
+            from ..training.verl_contract import validate_verl_runtime_contract
+            evidence["verl_contract"] = validate_verl_runtime_contract()
+        except Exception as exc:
+            reasons.append(f"VeRL runtime contract failed: {exc}")
 
     if probe_cuda:
         _probe_cuda(reasons, evidence)

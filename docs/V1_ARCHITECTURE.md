@@ -49,6 +49,12 @@ families receive a content-addressed driver scaffold and remain
 `needs_review`. Model identifiers never imply that weights were downloaded or
 loaded.
 
+An implemented generated-driver ZIP enters through a static intake boundary,
+not Python import. The control plane validates archive paths and sizes, exact
+model/module identity, source-only contents, immutable conformance requirements,
+and optional hash-pinned dependencies before content-addressed storage. It
+remains unavailable until an isolated runtime executes the conformance suite.
+
 Repo2RLEnv generation is an explicit Foundry mode pinned to commit
 `e5e6a93a6d7947a012a361b68457a982cc85fc9e`. It runs behind the restricted
 `SandboxExecutor` for its `pr_diff` path, produces Harbor tasks, and is
@@ -128,6 +134,13 @@ GRPO plugins delegate Qwen3 Thinker LoRA to VeRL-Omni v0.2 pinned at
 `49dedb6ec0691588494b629fc1b610a86612966b`; both use grouped GRPO outcome
 advantages. Talker, codec, audio tower, caller, and reference policy remain
 frozen. Environment and reward code contain no optimizer-specific behavior.
+
+Image construction and worker startup both execute an upstream-contract audit.
+The audit imports the pinned VeRL packages, confirms AudioEnv's agent-loop
+registration and exact multimodal output surface, resolves the protected
+reward function through VeRL's real `pkg://` loader, and verifies the selected
+reward manager. API drift is therefore a preflight failure rather than a
+late-stage paid-training failure.
 
 For Qwen training, the frozen caller is a separate loopback service owned by
 the GPU worker. It keeps one checkpoint resident on caller-only GPUs,

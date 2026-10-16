@@ -98,6 +98,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   a complete conformance report can set `available=true`. Migration `0004`
   backfills legacy databases, and the dashboard shows the actual registration
   state rather than collapsing it into a boolean.
+- The Models product surface now accepts an implemented driver ZIP for a
+  review-gated model. Backend intake enforces a 4 MiB compressed/16 MiB
+  expanded ceiling, safe relative paths, no symlinks or native binaries,
+  exact model/module binding, the complete ordered conformance gate list, and
+  hash-pinned optional dependencies. The content-addressed package remains
+  `generated_needs_review`; upload never executes code or marks the model
+  available. Isolated runtime conformance is still required.
 - The executable Omni conformance contract now checks native-audio inference,
   structured actions, token/log-probability alignment, multimodal position
   channels, response masks, declared gradient scope, a real optimizer-state
@@ -221,6 +228,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   live-policy runtime factory, and processor-derived trajectory finalizer are
   implemented and locally contract-tested. The complete loop has not yet run
   inside the pinned CUDA worker.
+- The immutable GPU image now runs `audioenv-verl-contract-check` after
+  installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
+  output fields, async postprocessor hook, `audioenv_agent` registration,
+  `pkg://` protected reward loader, protected component weighting, and `naive`
+  reward-manager registration. Worker preflight repeats the check and records
+  its evidence; any upstream API drift fails before model loading or training.
+  The two pinned repositories were also inspected at their recorded commits,
+  but the image-level command still awaits a real Docker/CUDA image build.
 - RunPod has REST v2 quote/provision/state/stop methods plus a concrete
   strict-host-key SSH/SCP data plane for staging, detached worker launch,
   reconnectable event replay, safe-boundary cancellation, and hash-verified
@@ -254,7 +269,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-137 passed
+145 passed
 
 uv run audioenv validate
 389 passed, 0 failed

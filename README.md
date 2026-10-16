@@ -51,6 +51,9 @@ full-duplex streaming, or closed-model RL.
   and human-review-required; Codex is never invoked during startup or tests.
 - Omni model onboarding that selects an architecture-family driver or emits a
   conformance scaffold, plus capability-derived caller and trainer choices.
+- Guarded upload of implemented Omni-driver source packages. Uploads are
+  statically inspected, content-addressed, and kept unavailable until isolated
+  executable conformance succeeds; uploaded Python is never imported by the API.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
 - Pinned Repo2RLEnv-to-Harbor import in an isolated container, with protected
@@ -63,6 +66,9 @@ full-duplex streaming, or closed-model RL.
   but remain GPU-unverified.
 - A provider-neutral `audioenv-gpu-worker` bundle/event/artifact contract used
   by the verified local training backend and the CUDA-gated Qwen backend.
+- An executable pinned-VeRL API audit that verifies agent-loop registration,
+  rollout fields, protected reward loading, and reward-manager registration
+  while building or attesting the GPU worker runtime.
 
 The bundled WAV renderer generates deterministic audio fixtures for tests. It
 is not a speech synthesizer. A real deployment must inject a native-audio user

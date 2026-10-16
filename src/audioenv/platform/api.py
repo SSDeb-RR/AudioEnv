@@ -12,7 +12,7 @@ import subprocess
 from typing import Any, Callable, Literal
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
@@ -470,6 +470,43 @@ def create_app(
         probe["conformance"] = report.model_dump(mode="json")
         repository.set_model_probe(model_id, probe)
         return report.model_dump(mode="json")
+
+    @app.post("/api/models/{model_id:path}/driver-package", status_code=201)
+    async def upload_model_driver_package(model_id: str, request: Request) -> dict[str, Any]:
+        row = repository.get_model(model_id)
+        if row is None:
+            raise HTTPException(404, "model not found")
+        if row.registration_state == "certified":
+            raise HTTPException(409, "certified built-in model drivers cannot be replaced")
+        if request.headers.get("content-type", "").split(";", 1)[0] not in {
+            "application/zip", "application/octet-stream",
+        }:
+            raise HTTPException(415, "driver package must be uploaded as application/zip")
+        try:
+            payload = await _read_limited_body(request, 4 * 1024 * 1024)
+        except ValueError as exc:
+            raise HTTPException(413, str(exc)) from exc
+        try:
+            from ..models.package import inspect_driver_package
+            inspection = inspect_driver_package(payload, expected_model_id=model_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        stored = app.state.artifacts.put_bytes(payload, media_type="application/zip")
+        repository.add_artifact(
+            stored.id, experiment_id=None, project_id=row.project_id,
+            kind="model-driver-package", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path), metadata={
+                "model_id": model_id, "package_sha256": inspection.sha256,
+                "registration_state": "generated_needs_review",
+            },
+        )
+        updated = repository.set_model_driver_package(model_id, {
+            "artifact_id": stored.id, "sha256": inspection.sha256,
+            "manifest": inspection.manifest, "files": list(inspection.files),
+            "uncompressed_bytes": inspection.uncompressed_bytes,
+        })
+        return {"model": _model(updated), "artifact_id": stored.id,
+                "inspection": asdict(inspection)}
 
     @app.post("/api/gpu/preflight")
     def gpu_preflight(request: GPUPreflightRequest) -> dict[str, Any]:
@@ -1803,6 +1840,25 @@ def _model(row) -> dict[str, Any]:
         "probe": json.loads(row.probe_json) if row.probe_json else None,
         "config": json.loads(row.config_json),
     }
+
+
+async def _read_limited_body(request: Request, maximum_bytes: int) -> bytes:
+    supplied = request.headers.get("content-length")
+    if supplied:
+        try:
+            content_length = int(supplied)
+        except ValueError as exc:
+            raise ValueError("content-length must be an integer") from exc
+        if content_length < 0:
+            raise ValueError("content-length cannot be negative")
+        if content_length > maximum_bytes:
+            raise ValueError(f"request body exceeds {maximum_bytes} bytes")
+    payload = bytearray()
+    async for chunk in request.stream():
+        payload.extend(chunk)
+        if len(payload) > maximum_bytes:
+            raise ValueError(f"request body exceeds {maximum_bytes} bytes")
+    return bytes(payload)
 
 
 def _environment(row, *, details: bool = False) -> dict[str, Any]:

@@ -23,6 +23,7 @@ def test_gpu_image_keeps_ssh_pod_idle_and_contains_attested_source_checkouts():
     assert "/opt/audioenv/checkouts/verl-omni" in dockerfile
     assert "/opt/audioenv/checkouts/tau2" in dockerfile
     assert '"tau2 @ git+https://github.com/sierra-research/tau2-bench.git@${TAU2_COMMIT}"' in dockerfile
+    assert "RUN audioenv-verl-contract-check" in dockerfile
 
 
 def test_worker_bundle_rejects_incompatible_backend():
@@ -136,6 +137,28 @@ def test_qwen_runtime_rejects_dependency_and_dataset_tampering(tmp_path: Path, m
     assert not report.available
     assert any("vllm_omni_commit" in reason for reason in report.reasons)
     assert any("dataset hash" in reason for reason in report.reasons)
+
+
+def test_qwen_runtime_rejects_verl_api_contract_drift(tmp_path: Path, monkeypatch):
+    bundle, lock_path = _qwen_attestation_fixture(tmp_path)
+    monkeypatch.setattr(
+        "audioenv.platform.gpu_runtime._git_revision",
+        lambda _path: bundle.dependency_pins["tau2_commit"],
+    )
+    monkeypatch.setattr(
+        "audioenv.platform.gpu_runtime._installed_distribution",
+        lambda package: ("pinned", bundle.dependency_pins[f"{package.replace('-', '_')}_commit"]),
+    )
+    monkeypatch.setattr("audioenv.platform.gpu_runtime.metadata.version", lambda _name: "0.5.0")
+    monkeypatch.setattr(
+        "audioenv.training.verl_contract.validate_verl_runtime_contract",
+        lambda: (_ for _ in ()).throw(RuntimeError("upstream field drift")),
+    )
+    report = attest_qwen_runtime(
+        bundle, lock_path=lock_path, probe_cuda=False, probe_packages=True,
+    )
+    assert not report.available
+    assert any("VeRL runtime contract failed: upstream field drift" in reason for reason in report.reasons)
 
 
 def test_gpu_image_builder_rejects_mutable_base_before_docker(tmp_path: Path):

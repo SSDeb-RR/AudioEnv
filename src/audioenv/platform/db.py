@@ -348,6 +348,22 @@ class PlatformRepository:
             session.commit()
             return row
 
+    def set_model_driver_package(
+        self, model_id: str, package: dict[str, Any],
+    ) -> ModelRecord:
+        with self.database.session() as session:
+            row = session.get(ModelRecord, model_id)
+            if row is None:
+                raise KeyError(model_id)
+            config = json.loads(row.config_json)
+            config["driver_package"] = package
+            row.config_json = _dump(config)
+            row.registration_state = "generated_needs_review"
+            row.available = False
+            row.probe_json = None
+            session.commit()
+            return row
+
     def list_environments(self) -> list[EnvironmentRecord]:
         with self.database.session() as session:
             return list(session.scalars(select(EnvironmentRecord).order_by(EnvironmentRecord.created_at.desc())))

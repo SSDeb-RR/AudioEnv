@@ -31,6 +31,10 @@ RUN python -m pip install --no-cache-dir \
       "tau2 @ git+https://github.com/sierra-research/tau2-bench.git@${TAU2_COMMIT}" \
     && python -m pip install --no-cache-dir /tmp/audioenv.whl
 
+# Fail the immutable image build if either pinned upstream changes an API that
+# AudioEnv's agent-loop, multimodal output, or protected reward path relies on.
+RUN audioenv-verl-contract-check
+
 ENV AUDIOENV_DEPENDENCY_LOCK=/opt/audioenv/dependencies.lock.json
 
 RUN useradd --create-home --uid 10001 audioenv \
