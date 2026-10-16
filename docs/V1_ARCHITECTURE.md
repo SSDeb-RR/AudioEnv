@@ -226,7 +226,9 @@ content hash and creates a new draft whose immutable configuration records its
 parent experiment and checkpoint artifact. Local PyTorch runs restore model and
 optimizer state. GPU drafts bind `resume_from` to the preserved managed
 `global_step_*` directory; RunPod resume is rejected unless the original
-persistent network volume is recorded. Every child repeats preflight and
+persistent network volume is recorded. The child stores the original provider
+storage identity, and quote/preparation rejects a different local workspace,
+RunPod network volume, or Modal volume. Every child repeats preflight and
 explicit launch confirmation.
 
 The production entrypoint is `audioenv app --data-dir .audioenv`. It applies

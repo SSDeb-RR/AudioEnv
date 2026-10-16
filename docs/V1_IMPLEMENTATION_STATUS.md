@@ -192,7 +192,8 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   the checkpoint artifact hash; the dashboard resumes a local run, preflights
   it, explicitly launches it, and shows continued step numbering. GPU resume
   drafts resolve preserved `global_step_*` directories and RunPod fails closed
-  without its original persistent volume.
+  without its original persistent volume. Provider preparation rejects a
+  different local workspace, RunPod network volume, or Modal volume.
 - The GPU run wizard now emits VeRL's actual `max_steps` setting. The previous
   generic `steps` field could be ignored and silently fall back to one step.
 - The VeRL agent loop no longer supplies a precomputed reward score, which
@@ -323,7 +324,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-161 passed
+162 passed
 
 uv run audioenv validate
 389 passed, 0 failed

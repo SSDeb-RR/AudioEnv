@@ -6,7 +6,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from audioenv.platform.api import _remote_resume_checkpoint, create_app
+from audioenv.platform.api import (
+    _enforce_resume_storage, _remote_resume_checkpoint, _resume_storage_binding, create_app,
+)
 from audioenv.platform.db import (
     Database,
     InvalidTransition,
@@ -51,6 +53,52 @@ def test_gpu_resume_lineage_requires_preserved_checkpoint_directory(tmp_path):
     assert _remote_resume_checkpoint(
         repository, experiment.id, "runpod-secure-cloud", artifact,
     ).endswith("/validation/global_step_7")
+    binding = _resume_storage_binding(
+        repository, experiment.id, "runpod-secure-cloud",
+    )
+    assert binding["storage_id"] == "volume-1"
+    _enforce_resume_storage({"resume_storage": binding}, "runpod-secure-cloud", "volume-1")
+    with pytest.raises(HTTPException, match="original persisted storage"):
+        _enforce_resume_storage(
+            {"resume_storage": binding}, "runpod-secure-cloud", "different-volume",
+        )
+
+
+def test_resumed_runpod_quote_rejects_a_different_volume_before_provisioning(tmp_path):
+    app = create_app(f"sqlite:///{tmp_path / 'resume-api.sqlite'}")
+    repository = app.state.repository
+    source = repository.create_experiment("gpu source", {
+        "provider_id": "runpod-secure-cloud",
+        "trainer_id": "qwen3-omni-thinker-gspo-lora",
+        "gpu_worker": {},
+    })
+    for target in ("validating", "queued", "running", "evaluating", "completed"):
+        source = repository.transition(source.id, target)
+    stored = app.state.artifacts.put_bytes(b"checkpoint", media_type="application/octet-stream")
+    repository.add_artifact(
+        stored.id, experiment_id=source.id, project_id=source.project_id,
+        kind="checkpoint", media_type=stored.media_type, size_bytes=stored.size_bytes,
+        path=str(stored.path), metadata={
+            "remote_relative_path": "global_step_4/adapter/model.safetensors",
+        },
+    )
+    repository.create_compute_resource(
+        experiment_id=source.id, provider="runpod-secure-cloud", status="stopped",
+        config={"config": {"network_volume_id": "original-volume"}},
+    )
+    client = TestClient(app)
+    resumed = client.post(f"/api/experiments/{source.id}/resume", json={
+        "checkpoint_artifact_id": stored.id, "run_name": "gpu resumed",
+        "additional_steps": 1,
+    })
+    assert resumed.status_code == 201
+    response = client.post(f"/api/experiments/{resumed.json()['id']}/runpod/quote", json={
+        "image": "registry/audioenv:v1", "image_digest": "sha256:" + "a" * 64,
+        "max_runtime_hours": 1, "max_total_budget_usd": 10,
+        "network_volume_id": "different-volume",
+    })
+    assert response.status_code == 409
+    assert "original persisted storage" in response.text
 
 
 def test_api_uses_persisted_records(tmp_path):

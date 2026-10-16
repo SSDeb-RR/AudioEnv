@@ -890,6 +890,9 @@ def create_app(
                 repository, source.id, provider_id, artifact,
             )
             config["gpu_worker"] = gpu
+            config["resume_storage"] = _resume_storage_binding(
+                repository, source.id, provider_id,
+            )
             hyperparameters["max_steps"] = request.additional_steps
             hyperparameters.pop("steps", None)
         config.update({
@@ -1170,6 +1173,7 @@ def create_app(
             raise HTTPException(404, "experiment not found")
         config = json.loads(record.config_json)
         reasons = _runpod_configuration_reasons(repository, config)
+        _enforce_resume_storage(config, "runpod-secure-cloud", request.network_volume_id)
         if reasons:
             raise HTTPException(422, {"reasons": reasons})
         from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
@@ -1212,6 +1216,7 @@ def create_app(
             raise HTTPException(404, "experiment not found")
         config = json.loads(record.config_json)
         reasons = _gpu_configuration_reasons(repository, config, "local-cuda")
+        _enforce_resume_storage(config, "local-cuda", str(Path(request.data_dir).resolve()))
         if request.plan.provider != "local-cuda":
             reasons.append("execution plan must target local-cuda")
         if reasons:
@@ -1254,6 +1259,7 @@ def create_app(
             raise HTTPException(404, "experiment not found")
         config = json.loads(record.config_json)
         reasons = _gpu_configuration_reasons(repository, config, "modal-sandbox")
+        _enforce_resume_storage(config, "modal-sandbox", request.volume_name)
         if reasons:
             raise HTTPException(422, {"reasons": reasons})
         from .modal import ModalConfig, ModalSDKTransport, ModalSandboxProvider
@@ -1938,6 +1944,49 @@ def _remote_resume_checkpoint(
             raise HTTPException(409, "RunPod resume requires the original persistent network volume")
     directory = Path(*relative.parts[: checkpoint_index + 1]).as_posix()
     return f"/workspace/runs/{experiment_id}/output/{directory}"
+
+
+def _resume_storage_binding(
+    repository: PlatformRepository, experiment_id: str, provider_id: str,
+) -> dict[str, str]:
+    """Recover the storage identity that still owns a remote checkpoint."""
+
+    field = {
+        "runpod-secure-cloud": ("config", "network_volume_id"),
+        "modal-sandbox": ("config", "volume_name"),
+        "local-cuda": (None, "data_dir"),
+    }.get(provider_id)
+    if field is None:
+        raise HTTPException(422, "trainer/provider does not support checkpoint resume")
+    for resource in repository.list_compute_resources(experiment_id):
+        if resource.provider != provider_id:
+            continue
+        snapshot = json.loads(resource.config_json)
+        parent, name = field
+        value = snapshot.get(parent, {}).get(name) if parent else snapshot.get(name)
+        if isinstance(value, str) and value:
+            normalized = str(Path(value).resolve()) if provider_id == "local-cuda" else value
+            return {
+                "provider_id": provider_id,
+                "storage_id": normalized,
+                "source_resource_id": resource.id,
+            }
+    raise HTTPException(409, f"{provider_id} resume requires the original persisted storage")
+
+
+def _enforce_resume_storage(
+    config: dict[str, Any], provider_id: str, selected_storage: str | None,
+) -> None:
+    binding = config.get("resume_storage")
+    if not isinstance(binding, dict):
+        return
+    if binding.get("provider_id") != provider_id:
+        raise HTTPException(409, "resume must use the original execution provider")
+    selected = selected_storage or ""
+    if provider_id == "local-cuda" and selected:
+        selected = str(Path(selected).resolve())
+    if not selected or selected != binding.get("storage_id"):
+        raise HTTPException(409, "resume must use the original persisted storage")
 
 
 def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirmation_name):
