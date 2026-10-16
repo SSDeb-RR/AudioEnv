@@ -67,6 +67,30 @@ test("configure the guarded RunPod quote workflow without provisioning", async (
   await page.getByLabel("Image digest").fill(`sha256:${"a".repeat(64)}`);
   await page.getByRole("button", { name: "Run preflight" }).click();
   await expect(page.getByText("Preflight passed")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Request live RunPod quote" })).toBeEnabled();
-  await expect(page.getByText(/live quote required/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request RunPod compute estimate" })).toBeEnabled();
+  await expect(page.getByText(/reviewed compute estimate required/i)).toBeVisible();
+});
+
+test("configure and persist a guarded Modal estimate without provisioning", async ({ page, request }) => {
+  const modelId = `playwright-modal-qwen-${Date.now()}`;
+  const registered = await request.post("/api/models", { data: {
+    id: modelId, display_name: "Playwright Modal Qwen", adapter_type: "qwen3-omni",
+    role: "both", config: { checkpoint: "/workspace/audioenv/models/qwen" },
+  }});
+  expect(registered.ok()).toBeTruthy();
+
+  await page.goto("/runs");
+  await page.getByRole("button", { name: "New training run" }).click();
+  await page.getByLabel("Provider").selectOption("modal-sandbox");
+  await page.getByLabel("Agent").selectOption(modelId);
+  await page.getByLabel("Caller").selectOption("audioenv/omni-caller");
+  await page.getByLabel("Trainer").selectOption("qwen3-omni-thinker-gspo-lora");
+  await page.getByLabel("Run name").fill("Playwright guarded Modal run");
+  await page.getByLabel("Image digest").fill(`sha256:${"b".repeat(64)}`);
+  await page.getByRole("button", { name: "Run preflight" }).click();
+  await expect(page.getByText("Preflight passed")).toBeVisible();
+  await page.getByRole("button", { name: "Request Modal compute estimate" }).click();
+  await expect(page.getByText("Compute estimate ready for review")).toBeVisible();
+  await expect(page.getByText(/operator-configured rate/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Provision Modal and launch" })).toBeDisabled();
 });

@@ -191,7 +191,7 @@ def build_builtin_registry() -> HarnessRegistry:
         ),
         HarnessDescriptor(
             id="modal-sandbox", kind="provider", display_name="Modal Sandbox",
-            status="blocked", status_reason="transport contract ready; live credentials and paid acceptance not run",
+            status="needs_review", status_reason="guarded launch available; live credentials and paid acceptance not run",
             capabilities=("cuda", "distributed", "persistent-volume", "gvisor"),
         ),
     )

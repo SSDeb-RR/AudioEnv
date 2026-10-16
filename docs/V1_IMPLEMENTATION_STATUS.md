@@ -68,7 +68,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   GPU gVisor Sandboxes, stdout events, reconnect, termination, and file
   recovery without importing Modal or making calls at startup. The installed
   `modal==1.6.2` signatures were checked locally and the mapping is fake-SDK
-  tested; credentials and paid Sandbox acceptance were not used.
+  tested. The FastAPI lifecycle and dashboard now expose persisted preflight,
+  an explicitly operator-configured price estimate, exact-name confirmation,
+  launch, reconnect/sync, metrics, artifact recovery, and cancellation. Modal
+  credentials and paid Sandbox acceptance were not used.
 - The Harness Foundry accepts a local path or HTTPS GitHub repository, safely
   inventories it, compiles validated `audioenv-task.json` inputs, recognizes
   AudioEnv benchmark manifests, and emits a protected OCI scaffold for coding
@@ -198,9 +201,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   reconnectable event replay, safe-boundary cancellation, and hash-verified
   artifact collection. These paths are locally transport-tested; the live API,
   Pod SSH endpoint, container image, and paid execution are not verified.
-- Modal has a concrete optional SDK transport and tested provider lifecycle,
-  but is not yet wired through the persisted dashboard workflow and has not
-  run an external paid Sandbox acceptance job.
+- Modal has a concrete optional SDK transport and a persisted dashboard/API
+  workflow. Modal does not provide a live market-price quote through this
+  integration, so its UI labels the configured rate as an estimate. An
+  external paid Sandbox acceptance job has not run.
 
 ## Blocked
 
@@ -223,14 +227,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-123 passed
+124 passed
 
 uv run audioenv validate
 389 passed, 0 failed
 
 cd web && npm run build && npm run test:e2e
 Vite production build passed
-3 Playwright product-flow tests passed
+4 Playwright product-flow tests passed
 
 uv build
 audioenv_foundry-0.5.0 wheel and sdist built

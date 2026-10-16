@@ -4,8 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from audioenv.contracts import GPUWorkerEventV1, GPUWorkerExperimentV1
+from audioenv.platform.api import create_app
 from audioenv.platform.modal import ModalConfig, ModalSDKTransport, ModalSandboxProvider
 
 
@@ -161,3 +163,70 @@ def test_modal_sdk_transport_maps_official_sdk_boundaries_without_network():
     assert transport.get_sandbox("sb-sdk")["state"] == "started"
     assert transport.terminate_sandbox("sb-sdk")["state"] == "finished"
     assert sandbox.terminated
+
+
+def test_modal_quote_launch_sync_and_cancel_are_persisted_product_flow(tmp_path):
+    transport = _Transport()
+    client = TestClient(create_app(
+        f"sqlite:///{tmp_path / 'modal.sqlite'}", modal_transport=transport,
+    ))
+    project = client.get("/api/projects").json()[0]
+    environment = client.get("/api/environments").json()[0]
+    model_id = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+    assert client.post("/api/models", json={
+        "id": model_id, "display_name": "Qwen3 Omni", "adapter_type": "qwen3-omni",
+        "role": "both", "project_id": project["id"],
+        "config": {"checkpoint": "/workspace/models/qwen"},
+    }).status_code == 201
+    experiment = client.post("/api/experiments", json={
+        "name": "Modal Qwen proof", "project_id": project["id"], "config": {
+            "project_id": project["id"], "environment_id": environment["id"],
+            "agent_model_id": model_id, "caller_model_id": model_id,
+            "trainer_id": "qwen3-omni-thinker-gspo-lora",
+            "provider_id": "modal-sandbox", "reward_version": "tau2-v1",
+            "gpu_worker": {
+                "environment_manifest": "/workspace/tau2/environment.json",
+                "model_path": "/workspace/models/qwen",
+                "caller_model_path": "/workspace/models/qwen",
+                "rollout_dataset_path": "/workspace/tau2/train.jsonl",
+                "validation_dataset_path": "/workspace/tau2/test.jsonl",
+                "verl_checkout": "/opt/audioenv/checkouts/verl-omni",
+                "tau2_checkout": "/opt/audioenv/checkouts/tau2",
+            },
+        },
+    }).json()
+    preflight = client.post(f"/api/experiments/{experiment['id']}/preflight").json()
+    assert preflight["available"] and preflight["provider_id"] == "modal-sandbox"
+    quote_response = client.post(f"/api/experiments/{experiment['id']}/modal/quote", json={
+        "image": "registry.example/audioenv-gpu:v1",
+        "image_digest": "sha256:" + "a" * 64,
+        "max_runtime_hours": 2, "max_total_budget_usd": 40,
+        "hourly_price_per_gpu_usd": 2, "secret_names": ["HF_TOKEN"],
+    })
+    assert quote_response.status_code == 201, quote_response.text
+    quote = quote_response.json()
+    assert quote["config"]["pricing_basis"].startswith("operator-configured")
+    assert not transport.created
+    wrong = client.post(f"/api/experiments/{experiment['id']}/launch", json={
+        "confirmed": True, "provider": "modal-sandbox",
+        "quote_id": quote["id"], "confirmation_name": "wrong",
+    })
+    assert wrong.status_code == 400 and not transport.created
+    launched = client.post(f"/api/experiments/{experiment['id']}/launch", json={
+        "confirmed": True, "provider": "modal-sandbox",
+        "quote_id": quote["id"], "confirmation_name": "Modal Qwen proof",
+    })
+    assert launched.status_code == 202, launched.text
+    assert launched.json()["resource"]["external_id"] == "sb-1"
+    transport.events = [GPUWorkerEventV1(
+        sequence=1, experiment_id=experiment["id"], type="metric", timestamp="now",
+        payload={"step": 1, "name": "loss", "value": 0.25, "source": "verl"},
+    ).model_dump_json()]
+    synced = client.post(
+        f"/api/experiments/{experiment['id']}/compute-resources/{quote['id']}/sync",
+    )
+    assert synced.status_code == 200, synced.text
+    assert client.get(f"/api/experiments/{experiment['id']}/metrics").json()[0]["value"] == 0.25
+    cancelled = client.post(f"/api/experiments/{experiment['id']}/cancel")
+    assert cancelled.status_code == 200
+    assert transport.terminated == ["sb-1"]

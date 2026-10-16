@@ -90,6 +90,18 @@ class RunPodQuoteRequest(StrictRequest):
     known_hosts_secret_name: str = Field(default="RUNPOD_KNOWN_HOSTS", pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
 
 
+class ModalQuoteRequest(StrictRequest):
+    image: str = Field(min_length=1, max_length=500)
+    image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    gpu_type: str = Field(default="H100", min_length=1, max_length=100)
+    gpu_count: int = Field(default=8, ge=1)
+    max_runtime_hours: float = Field(gt=0, le=24)
+    max_total_budget_usd: float = Field(ge=0)
+    volume_name: str = Field(default="audioenv-runs", min_length=1, max_length=200)
+    secret_names: tuple[str, ...] = ()
+    hourly_price_per_gpu_usd: float = Field(gt=0)
+
+
 class ModelProbeRequest(StrictRequest):
     model_id: str
 
@@ -130,6 +142,7 @@ def create_app(
     database_url: str | None = None, *, static_dir: Path | None = None,
     runpod_transport: Any | None = None,
     runpod_executor_factory: Callable[[dict[str, Any], Any], Any] | None = None,
+    modal_transport: Any | None = None,
 ) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
@@ -155,6 +168,7 @@ def create_app(
     app.state.validation_runner = IsolatedValidationRunner()
     app.state.runpod_transport = runpod_transport
     app.state.runpod_executor_factory = runpod_executor_factory
+    app.state.modal_transport = modal_transport
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -581,34 +595,37 @@ def create_app(
             raise HTTPException(409, str(exc)) from exc
         active = [
             item for item in repository.list_compute_resources(experiment_id)
-            if item.provider == "runpod-secure-cloud"
+            if item.provider in {"runpod-secure-cloud", "modal-sandbox"}
             and item.external_id and item.status in {"provisioning", "running", "cancelling"}
         ]
         if active:
-            from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
-            provider = RunPodSecureCloudProvider(
-                app.state.runpod_transport or RunPodRESTV2Transport()
-            )
             for resource in active:
                 try:
-                    snapshot = json.loads(resource.config_json)
-                    runpod_config = RunPodConfig(**snapshot["config"])
-                    remote = provider.reconnect(resource.external_id or "")
-                    executor = _resolve_runpod_executor(app, remote, runpod_config, snapshot)
-                    if executor is not None and "worker_launch" in snapshot:
-                        provider.request_cancellation(executor, experiment_id)
-                    provider.cancel(resource.external_id or "")
+                    if resource.provider == "runpod-secure-cloud":
+                        from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
+                        snapshot = json.loads(resource.config_json)
+                        runpod_config = RunPodConfig(**snapshot["config"])
+                        provider = RunPodSecureCloudProvider(
+                            app.state.runpod_transport or RunPodRESTV2Transport()
+                        )
+                        remote = provider.reconnect(resource.external_id or "")
+                        executor = _resolve_runpod_executor(app, remote, runpod_config, snapshot)
+                        if executor is not None and "worker_launch" in snapshot:
+                            provider.request_cancellation(executor, experiment_id)
+                        provider.cancel(resource.external_id or "")
+                    else:
+                        _modal_provider(app, json.loads(resource.config_json)).cancel(resource.external_id or "")
                     repository.update_compute_resource(resource.id, status="cancelled")
                 except Exception as exc:
                     repository.update_compute_resource(resource.id, status="cancellation_failed")
                     repository.add_log(
-                        experiment_id, "RunPod cancellation failed", level="error",
+                        experiment_id, "External compute cancellation failed", level="error",
                         payload={"resource_id": resource.id, "reason": str(exc)},
                     )
-                    raise HTTPException(502, f"RunPod cancellation failed: {exc}") from exc
+                    raise HTTPException(502, f"External compute cancellation failed: {exc}") from exc
             try:
                 record = repository.transition(experiment_id, "cancelled", {
-                    "provider": "runpod-secure-cloud",
+                    "provider": active[0].provider,
                     "resource_ids": [item.id for item in active],
                 })
             except InvalidTransition as exc:
@@ -626,6 +643,21 @@ def create_app(
         resource = repository.get_compute_resource(resource_id)
         if resource is None or resource.experiment_id != experiment_id:
             raise HTTPException(404, "compute resource not found")
+        if resource.provider == "modal-sandbox" and resource.external_id:
+            snapshot = json.loads(resource.config_json)
+            try:
+                remote = _modal_provider(app, snapshot).reconnect(resource.external_id)
+            except Exception as exc:
+                raise HTTPException(502, f"Modal state refresh failed: {exc}") from exc
+            state = str(remote.get("state", "unknown")).lower()
+            status = "running" if state == "started" else (
+                "stopped" if state == "finished" and remote.get("returncode") in {0, None}
+                else "failed"
+            )
+            snapshot["last_remote_state"] = remote
+            return _compute_resource(repository.update_compute_resource(
+                resource.id, status=status, config=snapshot,
+            ))
         if resource.provider != "runpod-secure-cloud" or not resource.external_id:
             raise HTTPException(422, "compute resource cannot be reconciled")
         from .runpod import RunPodRESTV2Transport, RunPodSecureCloudProvider
@@ -673,6 +705,8 @@ def create_app(
         resource = repository.get_compute_resource(resource_id)
         if resource is None or resource.experiment_id != experiment_id:
             raise HTTPException(404, "compute resource not found")
+        if resource.provider == "modal-sandbox" and resource.external_id:
+            return _sync_modal_resource(app, repository, record, resource)
         if resource.provider != "runpod-secure-cloud" or not resource.external_id:
             raise HTTPException(422, "compute resource cannot be synchronized")
         snapshot = json.loads(resource.config_json)
@@ -799,6 +833,47 @@ def create_app(
         })
         return _compute_resource(resource)
 
+    @app.post("/api/experiments/{experiment_id}/modal/quote", status_code=201)
+    def modal_quote(experiment_id: str, request: ModalQuoteRequest) -> dict[str, Any]:
+        record = repository.get_experiment(experiment_id)
+        if record is None:
+            raise HTTPException(404, "experiment not found")
+        config = json.loads(record.config_json)
+        reasons = _gpu_configuration_reasons(repository, config, "modal-sandbox")
+        if reasons:
+            raise HTTPException(422, {"reasons": reasons})
+        from .modal import ModalConfig, ModalSDKTransport, ModalSandboxProvider
+        values = request.model_dump()
+        hourly_rate = values.pop("hourly_price_per_gpu_usd")
+        modal_config = ModalConfig(run_name=record.name, **values)
+        transport = app.state.modal_transport or ModalSDKTransport(
+            hourly_prices={modal_config.gpu_type: hourly_rate},
+        )
+        provider = ModalSandboxProvider(transport)
+        try:
+            worker_experiment = _gpu_worker_experiment(record.id, record.name, config)
+            quote = provider.quote(modal_config)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f"Modal quote failed: {exc}") from exc
+        if not quote.available:
+            raise HTTPException(422, "Modal GPU quote is unavailable or exceeds the configured budget")
+        snapshot = {
+            "config": asdict(modal_config), "quote": asdict(quote),
+            "experiment_config_hash": record.config_hash,
+            "worker_experiment": worker_experiment.model_dump(mode="json"),
+            "pricing_basis": "operator-configured rate; Modal does not expose a live pricing quote API",
+        }
+        resource = repository.create_compute_resource(
+            experiment_id=experiment_id, provider=provider.provider_id,
+            status="quoted", config=snapshot,
+        )
+        repository.add_log(experiment_id, "Modal quote persisted for review", payload={
+            "resource_id": resource.id, "hourly_price_usd": quote.hourly_price_usd,
+            "maximum_cost_usd": quote.maximum_cost_usd,
+            "pricing_basis": snapshot["pricing_basis"],
+        })
+        return _compute_resource(resource)
+
     @app.post("/api/experiments/{experiment_id}/launch", status_code=202)
     def launch(experiment_id: str, request: LaunchRequest) -> dict[str, Any]:
         if not request.confirmed:
@@ -808,6 +883,10 @@ def create_app(
             raise HTTPException(404, "experiment not found")
         if request.provider == "runpod-secure-cloud":
             return _launch_runpod(
+                app, repository, record, request.quote_id, request.confirmation_name,
+            )
+        if request.provider == "modal-sandbox":
+            return _launch_modal(
                 app, repository, record, request.quote_id, request.confirmation_name,
             )
         if request.provider != "local-subprocess":
@@ -985,15 +1064,17 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
     provider_id = config.get("provider_id", "local-subprocess")
     environment_id = config.get("environment_id")
     agent_id = config.get("agent_model_id", "audioenv/small-audio-tool-policy")
-    if provider_id == "runpod-secure-cloud":
-        reasons = _runpod_configuration_reasons(repository, config)
+    if provider_id in {"runpod-secure-cloud", "modal-sandbox"}:
+        reasons = _gpu_configuration_reasons(repository, config, provider_id)
+        label = "Secure Cloud GPU selected by live quote" if provider_id == "runpod-secure-cloud" else "Modal GPU selected by reviewed estimate"
+        basis = "live RunPod quote required before launch" if provider_id == "runpod-secure-cloud" else "operator-configured Modal rate required before launch"
         return {
             "available": not reasons, "reasons": reasons, "trainer_id": trainer_id,
             "provider_id": provider_id, "environment_id": environment_id,
             "agent_model_id": agent_id,
-            "hardware": {"device_type": "Secure Cloud GPU selected by live quote", "device_count": 8},
+            "hardware": {"device_type": label, "device_count": 8},
             "cost": {"status": "quote_required", "estimated_usd": None,
-                     "basis": "live RunPod quote required before launch"},
+                     "basis": basis},
             "resource_estimate": None, "launch_requires_quote": True,
             "gpu_acceptance_status": "not_run",
         }
@@ -1032,14 +1113,20 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
 def _runpod_configuration_reasons(
     repository: PlatformRepository, config: dict[str, Any],
 ) -> list[str]:
+    return _gpu_configuration_reasons(repository, config, "runpod-secure-cloud")
+
+
+def _gpu_configuration_reasons(
+    repository: PlatformRepository, config: dict[str, Any], provider_id: str,
+) -> list[str]:
     reasons: list[str] = []
-    if config.get("provider_id") != "runpod-secure-cloud":
-        reasons.append("experiment provider must be runpod-secure-cloud")
+    if config.get("provider_id") != provider_id:
+        reasons.append(f"experiment provider must be {provider_id}")
     trainer_id = config.get("trainer_id")
     if trainer_id not in {
         "qwen3-omni-thinker-gspo-lora", "qwen3-omni-thinker-grpo-lora",
     }:
-        reasons.append("RunPod Qwen execution requires the GSPO or GRPO LoRA trainer")
+        reasons.append("GPU Qwen execution requires the GSPO or GRPO LoRA trainer")
     environment = repository.get_environment(config.get("environment_id", ""))
     if environment is None or environment.authoring_status != "validated":
         reasons.append("select a validated environment version")
@@ -1217,6 +1304,161 @@ def _launch_runpod(app, repository: PlatformRepository, record, quote_id, confir
                      "basis": f"{reviewed_quote.hourly_price_usd}/hour maximum"},
         },
     }
+
+
+def _modal_provider(app, snapshot: dict[str, Any]):
+    from .modal import ModalSDKTransport, ModalSandboxProvider
+    if app.state.modal_transport is not None:
+        return ModalSandboxProvider(app.state.modal_transport)
+    config = snapshot.get("config", {})
+    quote = snapshot.get("quote", {})
+    count = max(int(config.get("gpu_count", 1)), 1)
+    hourly = float(quote.get("hourly_price_usd", 0.0)) / count
+    return ModalSandboxProvider(ModalSDKTransport(
+        hourly_prices={str(config.get("gpu_type", "H100")): hourly},
+    ))
+
+
+def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirmation_name):
+    if confirmation_name != record.name:
+        raise HTTPException(400, "typed confirmation must exactly match the run name")
+    if not quote_id:
+        raise HTTPException(422, "a persisted Modal quote is required")
+    resource = repository.get_compute_resource(quote_id)
+    if (
+        resource is None or resource.experiment_id != record.id
+        or resource.provider != "modal-sandbox" or resource.status != "quoted"
+    ):
+        raise HTTPException(422, "Modal quote is missing, stale, or belongs to another experiment")
+    snapshot = json.loads(resource.config_json)
+    if snapshot.get("experiment_config_hash") != record.config_hash:
+        raise HTTPException(409, "experiment configuration changed after the quote")
+    from .modal import ModalConfig, ModalQuote
+    config = ModalConfig(**snapshot["config"])
+    reviewed_quote = ModalQuote(**snapshot["quote"])
+    provider = _modal_provider(app, snapshot)
+    fresh_quote = provider.quote(config)
+    if fresh_quote != reviewed_quote:
+        snapshot["refreshed_quote"] = asdict(fresh_quote)
+        repository.update_compute_resource(resource.id, status="requote_required", config=snapshot)
+        raise HTTPException(409, "Modal price or availability changed; review a fresh quote")
+    created_sandbox_id: str | None = None
+    try:
+        repository.transition(record.id, "validating")
+        experiment = GPUWorkerExperimentV1.model_validate(snapshot["worker_experiment"])
+        staged_path = provider.stage(config, experiment)
+        sandbox = provider.provision(
+            config, fresh_quote, experiment_path=staged_path,
+            confirmation_name=confirmation_name or "",
+        )
+        external_id = str(sandbox.get("id", ""))
+        if not external_id:
+            raise RuntimeError("Modal create response did not include a Sandbox id")
+        created_sandbox_id = external_id
+        snapshot["worker_launch"] = {"experiment_path": staged_path}
+        resource = repository.update_compute_resource(
+            resource.id, status="running", external_id=external_id, config=snapshot,
+        )
+        repository.transition(record.id, "queued", {
+            "provider": provider.provider_id, "resource_id": resource.id,
+            "external_id": external_id,
+        })
+    except InvalidTransition as exc:
+        if created_sandbox_id:
+            try:
+                provider.cancel(created_sandbox_id)
+            except Exception:
+                pass
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        if created_sandbox_id or resource.external_id:
+            try:
+                provider.cancel(created_sandbox_id or resource.external_id)
+            except Exception:
+                pass
+        try:
+            repository.transition(record.id, "failed", {"reason": f"Modal provisioning failed: {exc}"})
+        except InvalidTransition:
+            pass
+        repository.update_compute_resource(resource.id, status="failed")
+        raise HTTPException(502, f"Modal provisioning failed: {exc}") from exc
+    repository.add_log(record.id, "Modal GPU worker launched", payload={
+        "resource_id": resource.id, "external_id": resource.external_id,
+        "maximum_cost_usd": reviewed_quote.maximum_cost_usd,
+    })
+    return {
+        "resource": _compute_resource(resource), "preflight": {
+            "available": True, "provider_id": provider.provider_id,
+            "hardware": {"device_type": reviewed_quote.gpu_type,
+                         "device_count": reviewed_quote.gpu_count},
+            "cost": {"status": "estimated", "estimated_usd": reviewed_quote.maximum_cost_usd,
+                     "basis": snapshot["pricing_basis"]},
+        },
+    }
+
+
+def _sync_modal_resource(app, repository: PlatformRepository, record, resource) -> dict[str, Any]:
+    snapshot = json.loads(resource.config_json)
+    from .modal import ModalConfig
+    config = ModalConfig(**snapshot["config"])
+    provider = _modal_provider(app, snapshot)
+    try:
+        after = int(snapshot.get("synced_event_sequence", 0))
+        events = provider.stream_events(
+            resource.external_id, experiment_id=record.id, after_sequence=after,
+        )
+        terminal = None
+        for event in events:
+            if event.type == "metric":
+                repository.add_metric(
+                    record.id, int(event.payload["step"]), str(event.payload["name"]),
+                    float(event.payload["value"]), str(event.payload.get("source", "gpu-worker")),
+                )
+            elif event.type == "log":
+                repository.add_log(record.id, str(event.payload.get("message", "")), payload={
+                    "gpu_event_sequence": event.sequence, "channel": event.payload.get("channel"),
+                })
+            else:
+                repository.add_log(record.id, event.type, payload={
+                    "gpu_event_sequence": event.sequence, **event.payload,
+                })
+            if event.type in {"worker.completed", "worker.failed", "worker.cancelled"}:
+                terminal = event
+        if events:
+            snapshot["synced_event_sequence"] = events[-1].sequence
+        artifacts: list[str] = []
+        if terminal and terminal.type == "worker.completed":
+            incoming = app.state.data_root / "incoming" / resource.id
+            for path in provider.collect_artifacts(config, experiment_id=record.id, destination=incoming):
+                payload = path.read_bytes()
+                media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
+                stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
+                kind = "checkpoint" if "checkpoint" in path.parts or "adapter" in path.name else "gpu_run_artifact"
+                row = repository.add_artifact(
+                    stored.id, experiment_id=record.id, project_id=record.project_id,
+                    kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
+                    path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
+                )
+                artifacts.append(row.id)
+            _advance_gpu_terminal(repository, record.id, "completed")
+            provider.cancel(resource.external_id)
+            resource = repository.update_compute_resource(resource.id, status="stopped", config=snapshot)
+        elif terminal and terminal.type == "worker.failed":
+            _advance_gpu_terminal(repository, record.id, "failed", terminal.payload)
+            provider.cancel(resource.external_id)
+            resource = repository.update_compute_resource(resource.id, status="failed", config=snapshot)
+        elif terminal and terminal.type == "worker.cancelled":
+            _advance_gpu_terminal(repository, record.id, "cancelled", terminal.payload)
+            provider.cancel(resource.external_id)
+            resource = repository.update_compute_resource(resource.id, status="cancelled", config=snapshot)
+        else:
+            current = repository.get_experiment(record.id)
+            if current and current.status == "queued" and events:
+                repository.transition(record.id, "running", {"resource_id": resource.id})
+            resource = repository.update_compute_resource(resource.id, status="running", config=snapshot)
+    except Exception as exc:
+        raise HTTPException(502, f"Modal synchronization failed: {exc}") from exc
+    return {"resource": _compute_resource(resource), "events_synced": len(events), "artifact_ids": artifacts}
 
 
 def _project(row) -> dict[str, Any]:
