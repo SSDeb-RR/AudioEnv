@@ -41,6 +41,9 @@ full-duplex streaming, or closed-model RL.
 - FastAPI service and React/TypeScript dashboard driven by persisted records.
 - A genuine audio-conditioned Torch REINFORCE workflow with no oracle replay,
   train-only optimization, checkpoint reload, and 24-sample held-out comparison.
+- Leakage-safe training trajectories streamed to hash-bound JSONL, with a
+  run-scoped API and dashboard view of actions, rewards, state hashes, timing,
+  and terminal outcomes.
 - A dynamic harness registry for environments, model families, callers,
   trainers, and execution providers, including Python entry-point discovery.
 - A repository/benchmark Foundry that safely inventories source without

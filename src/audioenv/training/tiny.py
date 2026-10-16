@@ -28,7 +28,7 @@ from ..evaluation import build_evaluation_result, compare_evaluations, package_h
 from ..reference import build_reference_split_manifest
 from ..runtime import AudioEnvironment
 from ..spec import SpeakAction, TaskSpec, ToolCallAction
-from .base import CancelCheck, MetricSink
+from .base import CancelCheck, EpisodeSink, MetricSink
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +168,7 @@ class SmallAudioToolPolicyTrainer:
         *,
         metric_sink: MetricSink | None = None,
         cancel_check: CancelCheck | None = None,
+        episode_sink: EpisodeSink | None = None,
     ) -> TinyTrainingResult:
         errors = self.validate_config(config)
         if errors:
@@ -229,6 +230,8 @@ class SmallAudioToolPolicyTrainer:
             returns = rewards
             loss = sum(-log_prob * return_value - 0.02 * entropy for log_prob, return_value, entropy in zip(log_probs, returns, entropies))
             reward = sum(rewards)
+            if episode_sink:
+                episode_sink(step, env.trace.to_dict(include_observability=False))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

@@ -796,6 +796,37 @@ def create_app(
             raise HTTPException(404, "artifact file unavailable")
         return FileResponse(path, media_type=row.media_type, filename=path.name)
 
+    @app.get("/api/experiments/{experiment_id}/traces")
+    def experiment_traces(experiment_id: str, limit: int = 50) -> dict[str, Any]:
+        if repository.get_experiment(experiment_id) is None:
+            raise HTTPException(404, "experiment not found")
+        if limit < 1 or limit > 200:
+            raise HTTPException(422, "trace limit must be between 1 and 200")
+        candidates = [
+            row for row in repository.list_artifacts()
+            if row.experiment_id == experiment_id and row.kind == "training_trajectories"
+        ]
+        if not candidates:
+            return {"experiment_id": experiment_id, "available": False, "traces": []}
+        artifact = candidates[0]
+        path = Path(artifact.path).resolve()
+        if not path.is_file() or app.state.data_root not in path.parents:
+            raise HTTPException(404, "trajectory artifact file unavailable")
+        payload = path.read_bytes()
+        if sha256(payload).hexdigest() != artifact.id:
+            raise HTTPException(409, "trajectory artifact failed content-hash verification")
+        rows = []
+        for line in payload.splitlines()[-limit:]:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(409, "trajectory artifact contains invalid JSON") from exc
+            if not isinstance(value, dict) or "trace" not in value:
+                raise HTTPException(409, "trajectory artifact contains an invalid record")
+            rows.append(value)
+        return {"experiment_id": experiment_id, "available": True,
+                "artifact_id": artifact.id, "traces": rows}
+
     @app.get("/api/evaluations")
     def evaluations() -> list[dict[str, Any]]:
         return [_evaluation(repository, row) for row in repository.list_evaluations()]

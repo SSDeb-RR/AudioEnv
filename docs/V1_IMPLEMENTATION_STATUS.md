@@ -45,6 +45,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - `SmallAudioToolPolicyTrainer` performs real PyTorch REINFORCE updates from
   WAV features and public action candidates. It never reads oracle actions,
   hidden facts, expected state, or verifier predicates.
+- Every local training episode is streamed as a public, observability-redacted
+  JSONL trace and registered as a content-hashed experiment artifact. The
+  run-scoped API verifies that hash before returning bounded records, and the
+  dashboard displays actual actions, reward events, state hashes, latency, and
+  terminal outcome. Tampered trace artifacts fail closed.
 - Baseline evaluation runs before optimization. Trained evaluation runs only
   after checkpoint reload. Both use the same 24 held-out samples: 8 test tasks
   under clean, degraded, and fast-speaking audio.

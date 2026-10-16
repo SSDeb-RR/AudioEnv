@@ -191,6 +191,11 @@ protocols/samples, paired comparisons, split manifests, external resources,
 and artifact references. Large payloads use the artifact store. State
 transitions are validated as:
 
+The local trainer streams one leakage-safe public episode record per optimizer
+step to a JSONL artifact. Trace reads are scoped to the owning experiment,
+bounded, content-hash verified, and contain no observability sidecar. The same
+artifact contract is the target for native GPU trajectory export.
+
 ```text
 Draft -> Validating -> Queued -> Running -> Evaluating -> Completed
                          \          \             \

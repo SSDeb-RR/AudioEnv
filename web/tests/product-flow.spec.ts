@@ -21,6 +21,8 @@ test("create project, train, reload, compare, and export", async ({ page }) => {
   await page.getByText(`Browser run ${suffix}`).click();
   await expect(page.getByText("Status: completed"), "worker should finish").toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Paired held-out comparison")).toBeVisible();
+  await expect(page.getByText("Latest persisted rollout")).toBeVisible();
+  await expect(page.getByText(/no reward event|milestone|terminal/).first()).toBeVisible();
   await page.getByRole("button", { name: "Reload verify" }).click();
   await expect(page.getByText(/Reload verified at step 20/)).toBeVisible();
   await page.getByRole("button", { name: "Export reproducibility bundle" }).click();

@@ -79,7 +79,8 @@ def test_runpod_requires_typed_confirmation_and_enforces_budget():
 
 def test_api_launch_train_reload_compare_and_serve_spa(tmp_path):
     static = Path(__file__).parents[1] / "web" / "dist"
-    client = TestClient(create_app(f"sqlite:///{tmp_path / 'product.sqlite'}", static_dir=static))
+    app = create_app(f"sqlite:///{tmp_path / 'product.sqlite'}", static_dir=static)
+    client = TestClient(app)
     assert "AudioEnv" in client.get("/").text
     project = client.post("/api/projects", json={"name":"Acceptance","description":"E2E"}).json()
     environment = client.get("/api/environments").json()[0]
@@ -114,6 +115,17 @@ def test_api_launch_train_reload_compare_and_serve_spa(tmp_path):
     assert len(evaluations) == 2
     comparison = client.get(f"/api/comparisons?experiment_id={experiment['id']}").json()[0]["result"]
     assert comparison["compatible"] and comparison["paired_sample_count"] == 24
+    traces = client.get(f"/api/experiments/{experiment['id']}/traces").json()
+    assert traces["available"] and len(traces["traces"]) == 20
+    assert traces["traces"][-1]["training_step"] == 20
+    assert all(
+        step["observability"] == {}
+        for row in traces["traces"] for step in row["trace"]["steps"]
+    )
     exported = client.post(f"/api/experiments/{experiment['id']}/export", json={})
     assert exported.status_code == 201
     assert client.get(exported.json()["download_url"]).status_code == 200
+
+    trace_artifact = app.state.repository.get_artifact(traces["artifact_id"])
+    Path(trace_artifact.path).write_bytes(b"tampered")
+    assert client.get(f"/api/experiments/{experiment['id']}/traces").status_code == 409

@@ -32,6 +32,8 @@ def run_job(database_path: Path, job_id: str) -> int:
         if job.kind not in {"tiny_train", "small_audio_train"}:
             raise ValueError(f"unsupported local job kind: {job.kind}")
         output = Path(payload["output"])
+        output.mkdir(parents=True, exist_ok=True)
+        trajectory_path = output / "training-trajectories.jsonl"
         config = TinyTrainerConfig(**payload.get("config", {}))
         package = build_reference_package()
         trainer = TinyAudioPolicyTrainer(package)
@@ -44,7 +46,15 @@ def run_job(database_path: Path, job_id: str) -> int:
             current = repository.get_experiment(experiment.id)
             return bool(current and current.cancel_requested)
 
-        result = trainer.train(config, output, metric_sink=metric, cancel_check=cancelled)
+        def episode(step: int, trace: dict) -> None:
+            row = {"training_step": step, "trace": trace}
+            with trajectory_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+
+        result = trainer.train(
+            config, output, metric_sink=metric, cancel_check=cancelled,
+            episode_sink=episode,
+        )
         if result.cancelled:
             repository.finish_job(job.id, worker_id, "cancelled")
             repository.transition(experiment.id, "cancelled")
@@ -66,6 +76,15 @@ def run_job(database_path: Path, job_id: str) -> int:
                 "initial_parameter_hash": result.initial_parameter_hash,
                 "final_parameter_hash": result.final_parameter_hash,
             },
+            project_id=experiment.project_id,
+        )
+        trajectory_bytes = trajectory_path.read_bytes()
+        repository.add_artifact(
+            sha256(trajectory_bytes).hexdigest(), experiment_id=experiment.id,
+            kind="training_trajectories", media_type="application/x-ndjson",
+            size_bytes=len(trajectory_bytes), path=str(trajectory_path.resolve()),
+            metadata={"format": "audioenv.public-trace-jsonl/v1", "observability_included": False,
+                      "episode_count": len(trajectory_bytes.splitlines())},
             project_id=experiment.project_id,
         )
         baseline = result.baseline_evaluation

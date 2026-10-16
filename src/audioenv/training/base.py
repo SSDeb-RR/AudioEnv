@@ -10,6 +10,7 @@ from ..contracts import ResourceEstimate, TrainerCapabilities
 
 MetricSink = Callable[[int, str, float, str], None]
 CancelCheck = Callable[[], bool]
+EpisodeSink = Callable[[int, dict[str, Any]], None]
 
 
 class TrainerPlugin(Protocol):
@@ -29,5 +30,6 @@ class TrainerPlugin(Protocol):
         *,
         metric_sink: MetricSink | None = None,
         cancel_check: CancelCheck | None = None,
+        episode_sink: EpisodeSink | None = None,
     ) -> Any: ...
 
