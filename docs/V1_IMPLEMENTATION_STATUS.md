@@ -50,6 +50,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   run-scoped API verifies that hash before returning bounded records, and the
   dashboard displays actual actions, reward events, state hashes, latency, and
   terminal outcome. Tampered trace artifacts fail closed.
+- The VeRL postprocessor now persists each validated native `TrajectoryV2` to
+  a per-process JSONL file only after Qwen processor positions and audio spans
+  are bound. Local CUDA, RunPod, and Modal artifact import classify these files
+  through the same `training_trajectories` contract. The trace API normalizes a
+  safe public view without returning token IDs, log-probabilities, private
+  caller state, or observability transcripts; unavailable native latency is
+  explicitly marked in trace metrics. Real GPU production remains unrun.
 - Baseline evaluation runs before optimization. Trained evaluation runs only
   after checkpoint reload. Both use the same 24 held-out samples: 8 test tasks
   under clean, degraded, and fast-speaking audio.
@@ -294,7 +301,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-154 passed
+156 passed
 
 uv run audioenv validate
 389 passed, 0 failed

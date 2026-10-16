@@ -195,6 +195,11 @@ The local trainer streams one leakage-safe public episode record per optimizer
 step to a JSONL artifact. Trace reads are scoped to the owning experiment,
 bounded, content-hash verified, and contain no observability sidecar. The same
 artifact contract is the target for native GPU trajectory export.
+The VeRL postprocessing bridge writes per-process V2 JSONL only after native
+multimodal position validation. Provider collectors classify those files as
+training trajectories, and the control plane projects them into the same
+public trace view while stripping optimizer tensors and retaining raw files as
+content-addressed reproducibility artifacts.
 
 ```text
 Draft -> Validating -> Queued -> Running -> Evaluating -> Completed

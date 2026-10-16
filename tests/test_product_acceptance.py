@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from audioenv.contracts import EvaluationProtocolV1, EvaluationSampleV1
 from audioenv.evaluation import build_evaluation_result, compare_evaluations
 from audioenv.platform.api import create_app
+from audioenv.platform.api import _gpu_artifact_kind, _public_trace_row
 from audioenv.platform.runpod import RunPodConfig, RunPodSecureCloudProvider
 from audioenv.reference import build_reference_package, build_reference_split_manifest
 from audioenv.spec import SpeakAction
@@ -48,6 +49,22 @@ def test_comparison_rejects_protocol_drift():
     comparison = compare_evaluations(baseline, drifted)
     assert not comparison.compatible
     assert comparison.incompatibilities == ("caller_hash",)
+
+
+def test_native_v2_trace_normalizes_without_private_training_tensors():
+    value = {
+        "schema_version": "audioenv.trajectory/v2", "task_id": "tau2-1", "seed": 7,
+        "processor_config": {"audio_profile_id": "native"},
+        "terminal_reward": 1.0, "process_reward": 0.25, "done": True,
+        "turns": [{"action": {"kind": "tool_call", "name": "lookup"},
+                   "generated_ids": [11, 12], "rollout_logprobs": [-1.0, -2.0]}],
+    }
+    public = _public_trace_row(value)
+    assert public["trace"]["final_metrics"]["terminal_pass"] is True
+    assert public["trace"]["final_metrics"]["latency_available"] is False
+    assert "generated_ids" not in str(public)
+    assert "rollout_logprobs" not in str(public)
+    assert _gpu_artifact_kind(Path("incoming/trajectories/trajectory-42.jsonl")) == "training_trajectories"
 
 
 class FakeRunPod:

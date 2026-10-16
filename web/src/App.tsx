@@ -24,7 +24,7 @@ type FoundryBuild = { id:string; project_id:string; kind:string; source_uri:stri
 type Harness = { id:string; kind:string; display_name:string; status:string; status_reason:string; capabilities:string[]; requires:string[] };
 type Compatibility = { environment_id:string; model_id:string; callers:{harness_id:string;compatible:boolean;status:string;reasons:string[]}[]; trainers:{harness_id:string;compatible:boolean;status:string;reasons:string[]}[] };
 type ComputeResource = { id:string; experiment_id:string; provider:string; external_id:string|null; status:string; config:{quote?:{gpu_type_id?:string;gpu_type?:string;gpu_count:number;hourly_price_usd:number;maximum_cost_usd:number;available:boolean};pricing_basis?:string;preflight?:{available:boolean;reasons:string[];telemetry:Record<string,unknown>}} };
-type TraceResponse = { available:boolean; artifact_id?:string; traces:{training_step:number;trace:{task_id:string;seed:number;audio_profile_id:string;final_metrics:Record<string,unknown>;steps:{index:number;action:Record<string,unknown>;observation:{reward:number;done:boolean;tool_result?:unknown};reward_events:{name:string;value:number;category:string}[];state_hash:string;latency_ms:number}[]}}[] };
+type TraceResponse = { available:boolean; artifact_id?:string; traces:{training_step:number|null;trace:{task_id:string;seed:number;audio_profile_id:string;final_metrics:Record<string,unknown>;steps:{index:number;action:Record<string,unknown>;observation:{reward:number;done:boolean;tool_result?:unknown};reward_events:{name:string;value:number;category:string}[];state_hash:string;latency_ms:number}[]}}[] };
 
 const nav = [
   ["/", "Overview", CircleGauge], ["/projects", "Projects", FolderKanban],

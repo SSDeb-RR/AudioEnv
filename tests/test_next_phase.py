@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 import asyncio
 import io
+import json
 from pathlib import Path
 import wave
 
@@ -33,7 +34,7 @@ from audioenv.training.verl_omni import VerlOmniConfig, VerlOmniGRPOTrainer, Ver
 from audioenv.training.verl_plugin import AudioEnvVerlAgentLoop, compute_audioenv_score, trajectory_to_verl_payload
 from audioenv.training.verl_runtime import NativeVerlRollout
 from audioenv.training.qwen_tau2_runtime import _flatten_policy_rows
-from audioenv.training.verl_trajectory_bridge import finalize_native_trajectory
+from audioenv.training.verl_trajectory_bridge import _persist_trajectory, finalize_native_trajectory
 
 
 HEX = "a" * 64
@@ -82,13 +83,21 @@ def test_trajectory_v2_preserves_multichannel_audio_rope_positions():
     peer = trace.model_copy(update={"episode_id": "ep-2", "seed": 2})
     batch = AudioEnvAgentLoop.to_verl_batch((trace, peer))
     assert batch.position_ids[0] == turn.position_ids
-
     with pytest.raises(ValueError, match="multimodal position channels"):
         TrainingTurnV2(**{
             **turn.model_dump(),
             "position_ids": ((0, 1), (0, 1, 2, 3)),
         })
 
+
+def test_native_trajectory_is_persisted_per_worker(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUDIOENV_TRAJECTORY_DIR", str(tmp_path))
+    trajectory = _trajectory(1.0, 9)
+    path = _persist_trajectory(trajectory)
+    assert path is not None and path.parent == tmp_path
+    row = json.loads(path.read_text().splitlines()[0])
+    assert row["schema_version"] == "audioenv.trajectory/v2"
+    assert row["task_id"] == trajectory.task_id
 
 def test_promotion_requires_all_gates_and_immutable_verifier():
     checks = {name: True for name in (

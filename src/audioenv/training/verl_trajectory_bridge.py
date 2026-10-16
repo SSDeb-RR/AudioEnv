@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from hashlib import sha256
 import io
+import json
+import os
 from pathlib import Path
 import wave
 from typing import Any
@@ -39,7 +41,21 @@ def install_trajectory_finalize_bridge(manager_class=None) -> bool:
                 audio_token_id=get_processor_token_id(self.processor, "audio"),
             )
             internal.extra_fields["audioenv_trajectory"] = trajectory.model_dump(mode="json")
+            _persist_trajectory(trajectory)
         return internal
+
+
+def _persist_trajectory(trajectory: TrajectoryV2) -> Path | None:
+    root = os.environ.get("AUDIOENV_TRAJECTORY_DIR")
+    if not root:
+        return None
+    destination = Path(root).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / f"trajectory-{os.getpid()}.jsonl"
+    line = json.dumps(trajectory.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(line + "\n")
+    return path
 
     manager_class._agent_loop_postprocess = postprocess
     manager_class._audioenv_trajectory_bridge = True

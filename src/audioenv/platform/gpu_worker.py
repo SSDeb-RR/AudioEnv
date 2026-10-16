@@ -179,6 +179,7 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
             "AUDIOENV_ROLLOUT_AUDIO_DIR": str((output / "rollout-audio").resolve()),
             "AUDIOENV_GRADIENT_EVIDENCE_DIR": str((output / "gradient-evidence").resolve()),
             "AUDIOENV_LOGPROB_EVIDENCE_DIR": str((output / "logprob-evidence").resolve()),
+            "AUDIOENV_TRAJECTORY_DIR": str((output / "trajectories").resolve()),
             "AUDIOENV_LOGPROB_MAX_ABS_ERROR": str(hp.get("logprob_max_abs_error", 0.05)),
         })
         process = subprocess.Popen(

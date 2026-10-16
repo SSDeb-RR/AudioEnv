@@ -808,24 +808,24 @@ def create_app(
         ]
         if not candidates:
             return {"experiment_id": experiment_id, "available": False, "traces": []}
-        artifact = candidates[0]
-        path = Path(artifact.path).resolve()
-        if not path.is_file() or app.state.data_root not in path.parents:
-            raise HTTPException(404, "trajectory artifact file unavailable")
-        payload = path.read_bytes()
-        if sha256(payload).hexdigest() != artifact.id:
-            raise HTTPException(409, "trajectory artifact failed content-hash verification")
         rows = []
-        for line in payload.splitlines()[-limit:]:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise HTTPException(409, "trajectory artifact contains invalid JSON") from exc
-            if not isinstance(value, dict) or "trace" not in value:
-                raise HTTPException(409, "trajectory artifact contains an invalid record")
-            rows.append(value)
+        for artifact in candidates:
+            path = Path(artifact.path).resolve()
+            if not path.is_file() or app.state.data_root not in path.parents:
+                raise HTTPException(404, "trajectory artifact file unavailable")
+            payload = path.read_bytes()
+            if sha256(payload).hexdigest() != artifact.id:
+                raise HTTPException(409, "trajectory artifact failed content-hash verification")
+            for line in payload.splitlines():
+                try:
+                    value = json.loads(line)
+                    rows.append(_public_trace_row(value))
+                except (ValueError, json.JSONDecodeError) as exc:
+                    raise HTTPException(409, "trajectory artifact contains an invalid record") from exc
+        rows = rows[-limit:]
         return {"experiment_id": experiment_id, "available": True,
-                "artifact_id": artifact.id, "traces": rows}
+                "artifact_id": candidates[0].id, "artifact_ids": [item.id for item in candidates],
+                "traces": rows}
 
     @app.get("/api/evaluations")
     def evaluations() -> list[dict[str, Any]]:
@@ -1079,7 +1079,7 @@ def create_app(
                     payload = path.read_bytes()
                     media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
                     stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
-                    kind = "checkpoint" if "checkpoint" in path.parts or "adapter" in path.name else "gpu_run_artifact"
+                    kind = _gpu_artifact_kind(path)
                     row = repository.add_artifact(
                         stored.id, experiment_id=experiment_id, project_id=record.project_id,
                         kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
@@ -1838,13 +1838,21 @@ def _store_gpu_artifact(app, repository: PlatformRepository, record, path: Path,
     payload = path.read_bytes()
     media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
     stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
-    kind = "checkpoint" if "checkpoint" in path.parts or "adapter" in path.name else "gpu_run_artifact"
+    kind = _gpu_artifact_kind(path)
     row = repository.add_artifact(
         stored.id, experiment_id=record.id, project_id=record.project_id,
         kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
         path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
     )
     return row.id
+
+
+def _gpu_artifact_kind(path: Path) -> str:
+    if "checkpoint" in path.parts or "adapter" in path.name:
+        return "checkpoint"
+    if "trajectories" in path.parts and path.name.startswith("trajectory-") and path.suffix == ".jsonl":
+        return "training_trajectories"
+    return "gpu_run_artifact"
 
 
 def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirmation_name):
@@ -1961,7 +1969,7 @@ def _sync_modal_resource(app, repository: PlatformRepository, record, resource) 
                 payload = path.read_bytes()
                 media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
                 stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
-                kind = "checkpoint" if "checkpoint" in path.parts or "adapter" in path.name else "gpu_run_artifact"
+                kind = _gpu_artifact_kind(path)
                 row = repository.add_artifact(
                     stored.id, experiment_id=record.id, project_id=record.project_id,
                     kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
@@ -2028,6 +2036,51 @@ async def _read_limited_body(request: Request, maximum_bytes: int) -> bytes:
         if len(payload) > maximum_bytes:
             raise ValueError(f"request body exceeds {maximum_bytes} bytes")
     return bytes(payload)
+
+
+def _public_trace_row(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("trace row must be an object")
+    if isinstance(value.get("trace"), dict):
+        return value
+    if value.get("schema_version") != "audioenv.trajectory/v2":
+        raise ValueError("unsupported trajectory schema")
+    turns = value.get("turns")
+    if not isinstance(turns, list) or not turns:
+        raise ValueError("native trajectory has no turns")
+    terminal = float(value.get("terminal_reward", 0.0))
+    process = float(value.get("process_reward", 0.0))
+    steps = []
+    for index, turn in enumerate(turns, 1):
+        if not isinstance(turn, dict) or not isinstance(turn.get("action"), dict):
+            raise ValueError("native trajectory turn is invalid")
+        final = index == len(turns)
+        events = []
+        if final and process:
+            events.append({"name": "verified_process_reward", "value": process, "category": "process"})
+        if final:
+            events.append({"name": "terminal_reward", "value": terminal, "category": "terminal"})
+        action = turn["action"]
+        steps.append({
+            "index": index, "action": action,
+            "observation": {"reward": terminal + process if final else 0.0,
+                            "done": bool(value.get("done")) and final},
+            "reward_events": events,
+            "state_hash": sha256(json.dumps(action, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            # VeRL V2 currently has no per-turn wall-clock field. Zero is a
+            # sentinel paired with the explicit availability flag below.
+            "latency_ms": 0.0,
+        })
+    return {
+        "training_step": None,
+        "trace": {
+            "task_id": str(value.get("task_id", "")), "seed": int(value.get("seed", 0)),
+            "audio_profile_id": str((value.get("processor_config") or {}).get("audio_profile_id", "native")),
+            "final_metrics": {"terminal_pass": terminal > 0, "terminal_reward": terminal,
+                              "process_reward": process, "latency_available": False},
+            "steps": steps,
+        },
+    }
 
 
 def _restore_trusted_model_images(app: FastAPI, repository: PlatformRepository) -> None:
