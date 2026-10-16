@@ -17,10 +17,15 @@ types cover start, preflight, training, metrics, checkpoints, evaluation,
 artifact manifest, cancellation, failure, and completion.
 
 The local CPU proof backend is executable on development machines. The
-`qwen3-omni-verl` backend validates the pinned VeRL checkout, checkpoint,
-caller, rollout seed data, environment manifest, CUDA topology, and resume
-checkpoint before launching VeRL-Omni. It exits rather than silently ignoring
-an unsupported configuration.
+`qwen3-omni-verl` backend performs two fail-closed preflights. Runtime
+attestation compares the experiment pins with the dependency receipt embedded
+in the image, reads the installed Git revisions for VeRL-Omni, VeRL, and
+vLLM-Omni, verifies the exact Qwen checkpoint revision, checks the pinned tau2
+checkout, hashes the train/test JSONL and manifests, rejects task overlap, and
+probes PyTorch CUDA. Trainer preflight then checks the VeRL checkout, CUDA
+topology, model/caller paths, environment manifest, and resume checkpoint. The
+worker persists the complete evidence and exits before starting model services
+when either preflight fails.
 
 The Qwen launcher mirrors the pinned VeRL-Omni V1 recipe: it invokes
 `verl_omni.trainer.main_omni`, selects the `qwen3_omni_moe` vLLM-Omni
@@ -55,12 +60,15 @@ base image. Release builds must supply an NVIDIA CUDA image using an immutable
 digest, plus the built AudioEnv wheel:
 
 ```bash
-docker build \
-  --build-arg BASE_IMAGE='nvidia/cuda@sha256:<approved-digest>' \
-  --build-arg AUDIOENV_WHEEL='dist/audioenv_foundry-<version>-py3-none-any.whl' \
-  -f docker/gpu-worker/Dockerfile .
+docker/gpu-worker/build.sh \
+  'nvidia/cuda@sha256:<approved-digest>' \
+  'dist/audioenv_foundry-<version>-py3-none-any.whl' \
+  'registry.example/audioenv-gpu:<release>'
 ```
 
-The dependency receipt records the VeRL-Omni, tau2, and Repo2RLEnv revisions.
+The build wrapper rejects mutable base-image tags before Docker runs. The
+dependency receipt records the AudioEnv, Qwen checkpoint, VeRL-Omni, VeRL,
+vLLM-Omni, tau2, and Repo2RLEnv revisions and is copied into the image at
+`/opt/audioenv/dependencies.lock.json`.
 Building and publishing the release image remains blocked until a CUDA base
 digest is selected and the image passes the GPU acceptance suite.

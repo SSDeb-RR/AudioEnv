@@ -2,8 +2,10 @@
   "schema_version": "audioenv.gpu-worker-dependencies/v1",
   "audioenv_version": "0.5.0",
   "qwen_model": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+  "qwen_model_revision": "26291f793822fb6be9555850f06dfe95f2d7e695",
   "verl_omni_commit": "49dedb6ec0691588494b629fc1b610a86612966b",
   "verl_commit": "8a694930275061f52ebd538c906ef8819af56dbd",
+  "vllm_omni_commit": "fe478a95ab39e80085da06e3401c3ed471898a57",
   "tau2_commit": "fc0055dc4e0a316c3f83133267fbd6faaa770992",
   "repo2rlenv_commit": "e5e6a93a6d7947a012a361b68457a982cc85fc9e",
   "base_image_policy": "Build must supply an NVIDIA CUDA image by immutable sha256 digest."

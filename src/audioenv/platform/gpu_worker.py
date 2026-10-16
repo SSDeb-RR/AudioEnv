@@ -22,6 +22,7 @@ from urllib.request import urlopen
 
 from ..contracts import GPUWorkerEventV1, GPUWorkerExperimentV1
 from ..reference import build_reference_package
+from .gpu_runtime import attest_qwen_runtime
 from ..training import (
     TinyAudioPolicyTrainer, TinyTrainerConfig,
     VerlOmniConfig, VerlOmniGRPOTrainer, VerlOmniGSPOTrainer,
@@ -114,6 +115,13 @@ def _run_tiny(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
 
 
 def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWriter) -> int:
+    runtime = attest_qwen_runtime(experiment)
+    events.emit(
+        "preflight.completed", available=runtime.available,
+        report={"scope": "immutable-runtime", "reasons": runtime.reasons, "evidence": runtime.evidence},
+    )
+    if not runtime.available:
+        raise RuntimeError("GPU runtime attestation failed: " + "; ".join(runtime.reasons))
     trainer = VerlOmniGSPOTrainer() if experiment.algorithm == "gspo" else VerlOmniGRPOTrainer()
     hp = experiment.hyperparameters
     config = VerlOmniConfig(

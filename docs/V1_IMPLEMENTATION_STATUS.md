@@ -12,6 +12,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   supports safe-boundary cancellation, and writes a content-hashed artifact
   manifest. Its local backend has completed a real optimizer/checkpoint/reload/
   evaluation run; the Qwen backend remains CUDA-gated.
+- The Qwen worker now fails closed on immutable runtime attestation before
+  starting the caller or trainer. It compares the experiment with the image's
+  embedded dependency receipt, verifies installed Git revisions, the exact
+  Qwen checkpoint revision, pinned tau2 checkout, CUDA runtime, and separately
+  hashed/disjoint train and held-out manifests. The image build wrapper rejects
+  mutable base tags. Building that image still awaits an approved CUDA digest.
 
 - `audioenv app --data-dir .audioenv` applies Alembic migrations, recovers
   abandoned jobs, and serves FastAPI plus the compiled React SPA from one
@@ -177,7 +183,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-99 passed
+103 passed
 
 uv run audioenv validate
 389 passed, 0 failed
