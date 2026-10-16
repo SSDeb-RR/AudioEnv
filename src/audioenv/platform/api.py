@@ -199,6 +199,11 @@ def create_app(
         if trusted_model_conformance_images is not None
         else (item.strip() for item in configured_images.split(",") if item.strip())
     )
+    from ..integrations.model_conformance_sandbox import ImageBuildEvidenceAuthority
+    app.state.image_build_authority = ImageBuildEvidenceAuthority(
+        data_root / "secrets" / "model-image-evidence.key",
+    )
+    _restore_trusted_model_images(app, repository)
     app.state.promotion_authority = PromotionEvidenceAuthority(data_root / "secrets" / "promotion-evidence.key")
     app.state.harness_registry = build_builtin_registry()
     app.state.environment_foundry = EnvironmentFoundry(data_root / "foundry" / "sources", app.state.artifacts)
@@ -628,7 +633,8 @@ def create_app(
         image = str(receipt.get("image", ""))
         if not re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-f]{64}", image):
             raise HTTPException(422, "conformance image builder returned a mutable image reference")
-        stored = app.state.artifacts.put_json(receipt)
+        evidence = app.state.image_build_authority.issue(receipt)
+        stored = app.state.artifacts.put_json(evidence)
         repository.add_artifact(
             stored.id, experiment_id=None, project_id=row.project_id,
             kind="model-conformance-image-receipt", media_type=stored.media_type,
@@ -1991,6 +1997,42 @@ async def _read_limited_body(request: Request, maximum_bytes: int) -> bytes:
         if len(payload) > maximum_bytes:
             raise ValueError(f"request body exceeds {maximum_bytes} bytes")
     return bytes(payload)
+
+
+def _restore_trusted_model_images(app: FastAPI, repository: PlatformRepository) -> None:
+    """Restore only signed receipts chained to a configured trusted base."""
+
+    pending: list[dict[str, object]] = []
+    for artifact in repository.list_artifacts():
+        if artifact.kind != "model-conformance-image-receipt":
+            continue
+        try:
+            payload = app.state.artifacts.get_bytes(artifact.id)
+            if sha256(payload).hexdigest() != artifact.id:
+                continue
+            evidence = json.loads(payload)
+            receipt = app.state.image_build_authority.verify(evidence)
+            metadata = json.loads(artifact.metadata_json)
+            if (
+                receipt.get("image") != metadata.get("image")
+                or receipt.get("base_image") != metadata.get("base_image")
+            ):
+                continue
+            pending.append(receipt)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    changed = True
+    while changed:
+        changed = False
+        for receipt in tuple(pending):
+            base = str(receipt.get("base_image", ""))
+            image = str(receipt.get("image", ""))
+            if base in app.state.trusted_model_conformance_images and re.fullmatch(
+                r"(?:[^\s@]+@)?sha256:[0-9a-f]{64}", image,
+            ):
+                app.state.trusted_model_conformance_images.add(image)
+                pending.remove(receipt)
+                changed = True
 
 
 def _environment(row, *, details: bool = False) -> dict[str, Any]:

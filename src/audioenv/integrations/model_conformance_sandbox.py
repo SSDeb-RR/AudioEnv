@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import io
+from hashlib import sha256
+import hmac
 import json
+import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +21,49 @@ from ..models.omni_driver import ModelConformanceRunner
 
 
 _IMMUTABLE_IMAGE = re.compile(r"^(?:[^\s@]+@)?sha256:[0-9a-f]{64}$")
+
+
+class ImageBuildEvidenceAuthority:
+    def __init__(self, key_path: Path):
+        self.key_path = key_path.resolve()
+        self._key = self._load_or_create_key()
+        self.key_id = sha256(self._key).hexdigest()[:16]
+
+    def issue(self, receipt: dict[str, object]) -> dict[str, object]:
+        payload = {"receipt": receipt, "key_id": self.key_id, "nonce": secrets.token_hex(16)}
+        payload["signature"] = self._sign(payload)
+        return payload
+
+    def verify(self, evidence: dict[str, object]) -> dict[str, object]:
+        payload = dict(evidence)
+        signature = payload.pop("signature", None)
+        if payload.get("key_id") != self.key_id or not isinstance(signature, str):
+            raise ValueError("conformance image receipt key is not trusted")
+        if not hmac.compare_digest(signature, self._sign(payload)):
+            raise ValueError("conformance image receipt signature is invalid")
+        receipt = payload.get("receipt")
+        if not isinstance(receipt, dict):
+            raise ValueError("conformance image receipt is missing")
+        return receipt
+
+    def _sign(self, payload: dict[str, object]) -> str:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hmac.new(self._key, encoded, sha256).hexdigest()
+
+    def _load_or_create_key(self) -> bytes:
+        self.key_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.key_path.exists():
+            key = self.key_path.read_bytes()
+            if len(key) != 32:
+                raise RuntimeError("invalid conformance image evidence key")
+            return key
+        key = secrets.token_bytes(32)
+        descriptor = os.open(self.key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(descriptor, key)
+        finally:
+            os.close(descriptor)
+        return key
 
 
 class ModelConformanceImageBuilder(Protocol):

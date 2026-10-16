@@ -68,6 +68,10 @@ hash-locked `requirements.lock` enters that build context. Network is available
 for dependency bootstrap, but the uploaded driver source is absent. The
 resulting immutable image ID and driver-package hash are recorded in a build
 receipt; source is mounted only during the later network-off conformance run.
+The receipt is content-addressed and signed by a local `0600` key. Startup
+rehydrates derived image trust only through a valid receipt chain rooted in an
+operator-configured base digest, preventing restart from turning arbitrary
+database image strings into trusted runtimes.
 
 Repo2RLEnv generation is an explicit Foundry mode pinned to commit
 `e5e6a93a6d7947a012a361b68457a982cc85fc9e`. It runs behind the restricted

@@ -283,4 +283,18 @@ def test_api_builds_and_trusts_dependency_image(tmp_path):
     assert result.status_code == 201, result.text
     assert result.json()["image"] == derived
     assert derived in app.state.trusted_model_conformance_images
-    assert app.state.repository.get_artifact(result.json()["artifact_id"]).kind == "model-conformance-image-receipt"
+    artifact = app.state.repository.get_artifact(result.json()["artifact_id"])
+    assert artifact.kind == "model-conformance-image-receipt"
+
+    restarted = create_app(
+        f"sqlite:///{tmp_path / 'builder.sqlite'}",
+        trusted_model_conformance_images=(IMAGE,),
+    )
+    assert derived in restarted.state.trusted_model_conformance_images
+
+    Path(artifact.path).write_bytes(b"tampered receipt")
+    tampered = create_app(
+        f"sqlite:///{tmp_path / 'builder.sqlite'}",
+        trusted_model_conformance_images=(IMAGE,),
+    )
+    assert derived not in tampered.state.trusted_model_conformance_images

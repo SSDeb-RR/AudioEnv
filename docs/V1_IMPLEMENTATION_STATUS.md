@@ -120,8 +120,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   validated `requirements.lock`, uses pip `--require-hashes`, and labels the
   result with the driver-package hash; uploaded Python never enters the
   network-enabled build. The returned immutable local image ID and receipt are
-  content-addressed before the image becomes eligible for the network-off
-  conformance action. This build transport is fake-Docker tested; the current
+  content-addressed and HMAC-signed before the image becomes eligible for the
+  network-off conformance action. On restart, AudioEnv restores only receipts
+  whose artifact hash, signature, metadata, and approved-base trust chain all
+  verify. Tampered receipts are ignored. This build transport is fake-Docker tested; the current
   host still lacks the rootless CUDA Docker capability for a real build.
 - The executable Omni conformance contract now checks native-audio inference,
   structured actions, token/log-probability alignment, multimodal position

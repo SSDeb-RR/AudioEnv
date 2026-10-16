@@ -62,6 +62,8 @@ full-duplex streaming, or closed-model RL.
 - A controlled dependency-image builder derives from that approved base and
   installs only hash-locked requirements. Driver source is excluded from the
   network-enabled build context and runs later in the network-off sandbox.
+  Signed, content-addressed receipts preserve only verified image trust across
+  application restarts.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
 - Pinned Repo2RLEnv-to-Harbor import in an isolated container, with protected
