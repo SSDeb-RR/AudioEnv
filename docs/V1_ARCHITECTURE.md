@@ -62,6 +62,13 @@ host socket, writable root, added capabilities, or inherited secrets. Its exact
 ten-gate report is stored as an artifact before the registry can transition to
 `conformant`. The API process never imports uploaded Python.
 
+When a driver declares additional dependencies, a separate controlled build
+derives from an operator-approved worker digest. Only the statically validated,
+hash-locked `requirements.lock` enters that build context. Network is available
+for dependency bootstrap, but the uploaded driver source is absent. The
+resulting immutable image ID and driver-package hash are recorded in a build
+receipt; source is mounted only during the later network-off conformance run.
+
 Repo2RLEnv generation is an explicit Foundry mode pinned to commit
 `e5e6a93a6d7947a012a361b68457a982cc85fc9e`. It runs behind the restricted
 `SandboxExecutor` for its `pr_diff` path, produces Harbor tasks, and is

@@ -59,6 +59,9 @@ full-duplex streaming, or closed-model RL.
   network-off/read-only execution, optional read-only model weights, all ten
   model gates, and content-addressed evidence. Only a complete report promotes
   the model to `conformant`; this host has not run the GPU container gate.
+- A controlled dependency-image builder derives from that approved base and
+  installs only hash-locked requirements. Driver source is excluded from the
+  network-enabled build context and runs later in the network-off sandbox.
 - Qwen3-Omni Transformers and VeRL-Omni GSPO/LoRA adapters with truthful
   capability and hardware preflight failures.
 - Pinned Repo2RLEnv-to-Harbor import in an isolated container, with protected

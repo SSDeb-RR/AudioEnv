@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Any, Callable, Literal
 
@@ -117,8 +118,12 @@ class ModelProbeRequest(StrictRequest):
 
 
 class ModelConformanceSandboxRequest(StrictRequest):
-    image: str = Field(pattern=r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+    image: str = Field(pattern=r"^(?:[^\s@]+@)?sha256:[0-9a-f]{64}$")
     checkpoint_path: str | None = Field(default=None, max_length=4_096)
+
+
+class ModelConformanceImageBuildRequest(StrictRequest):
+    base_image: str = Field(pattern=r"^(?:[^\s@]+@)?sha256:[0-9a-f]{64}$")
 
 
 class GPUPreflightRequest(StrictRequest):
@@ -166,6 +171,7 @@ def create_app(
     local_cuda_provider: Any | None = None,
     harbor_transport: Any | None = None,
     model_conformance_transport: Any | None = None,
+    model_conformance_image_builder: Any | None = None,
     trusted_model_conformance_images: tuple[str, ...] | None = None,
 ) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
@@ -186,6 +192,7 @@ def create_app(
     app.state.data_root = data_root
     app.state.artifacts = LocalArtifactStore(artifact_root)
     app.state.model_conformance_transport = model_conformance_transport
+    app.state.model_conformance_image_builder = model_conformance_image_builder
     configured_images = os.environ.get("AUDIOENV_MODEL_CONFORMANCE_IMAGES", "")
     app.state.trusted_model_conformance_images = set(
         trusted_model_conformance_images
@@ -584,6 +591,54 @@ def create_app(
         updated = repository.set_model_probe(model_id, probe)
         return {"model": _model(updated), "report": report.model_dump(mode="json"),
                 "artifact_id": stored.id}
+
+    @app.post("/api/models/{model_id:path}/conformance-image", status_code=201)
+    def build_model_conformance_image(
+        model_id: str, request: ModelConformanceImageBuildRequest,
+    ) -> dict[str, Any]:
+        row = repository.get_model(model_id)
+        if row is None:
+            raise HTTPException(404, "model not found")
+        if request.base_image not in app.state.trusted_model_conformance_images:
+            raise HTTPException(422, "base image is not operator-approved")
+        config = json.loads(row.config_json)
+        package = config.get("driver_package")
+        if not isinstance(package, dict) or not package.get("artifact_id"):
+            raise HTTPException(422, "upload an implemented driver package before building")
+        artifact_id = str(package["artifact_id"])
+        try:
+            payload = app.state.artifacts.get_bytes(artifact_id)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(422, "driver package artifact is unavailable") from exc
+        if sha256(payload).hexdigest() != artifact_id:
+            raise HTTPException(422, "driver package artifact failed content-hash verification")
+        package_path = app.state.artifacts.describe(
+            artifact_id, media_type="application/zip",
+        ).path
+        try:
+            from ..integrations.model_conformance_sandbox import (
+                DockerModelConformanceImageBuilder,
+            )
+            builder = app.state.model_conformance_image_builder or DockerModelConformanceImageBuilder()
+            receipt = builder.build(package_path=package_path, base_image=request.base_image)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f"conformance image build failed: {exc}") from exc
+        if receipt.get("driver_package_sha256") != artifact_id:
+            raise HTTPException(422, "conformance image receipt is bound to a different driver package")
+        image = str(receipt.get("image", ""))
+        if not re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-f]{64}", image):
+            raise HTTPException(422, "conformance image builder returned a mutable image reference")
+        stored = app.state.artifacts.put_json(receipt)
+        repository.add_artifact(
+            stored.id, experiment_id=None, project_id=row.project_id,
+            kind="model-conformance-image-receipt", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path), metadata={
+                "model_id": model_id, "image": image, "base_image": request.base_image,
+                "driver_package_artifact_id": artifact_id,
+            },
+        )
+        app.state.trusted_model_conformance_images.add(image)
+        return {"image": image, "receipt": receipt, "artifact_id": stored.id}
 
     @app.post("/api/gpu/preflight")
     def gpu_preflight(request: GPUPreflightRequest) -> dict[str, Any]:

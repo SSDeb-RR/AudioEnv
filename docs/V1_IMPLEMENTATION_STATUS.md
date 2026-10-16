@@ -115,6 +115,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   to `conformant` only if every gate passes. Fake-container/API tests and a real
   rejected-scaffold worker execution pass locally; a real custom Omni image and
   GPU checkpoint remain externally gated.
+- The Models workflow can now build the required dependency layer from an
+  operator-approved immutable worker image. The build context contains only a
+  validated `requirements.lock`, uses pip `--require-hashes`, and labels the
+  result with the driver-package hash; uploaded Python never enters the
+  network-enabled build. The returned immutable local image ID and receipt are
+  content-addressed before the image becomes eligible for the network-off
+  conformance action. This build transport is fake-Docker tested; the current
+  host still lacks the rootless CUDA Docker capability for a real build.
 - The executable Omni conformance contract now checks native-audio inference,
   structured actions, token/log-probability alignment, multimodal position
   channels, response masks, declared gradient scope, a real optimizer-state
@@ -279,7 +287,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-152 passed
+154 passed
 
 uv run audioenv validate
 389 passed, 0 failed

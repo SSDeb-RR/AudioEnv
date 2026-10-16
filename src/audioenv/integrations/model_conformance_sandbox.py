@@ -2,18 +2,86 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 from typing import Protocol
+import zipfile
 
 from ..contracts import ModelConformanceReportV1
 from ..models.omni_driver import ModelConformanceRunner
 
 
-_IMMUTABLE_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_IMMUTABLE_IMAGE = re.compile(r"^(?:[^\s@]+@)?sha256:[0-9a-f]{64}$")
+
+
+class ModelConformanceImageBuilder(Protocol):
+    def build(self, *, package_path: Path, base_image: str) -> dict[str, object]: ...
+
+
+class DockerModelConformanceImageBuilder:
+    """Build a dependency layer without copying or executing uploaded source."""
+
+    def probe(self) -> tuple[str, ...]:
+        return DockerModelConformanceTransport().probe()
+
+    def build(self, *, package_path: Path, base_image: str) -> dict[str, object]:
+        if _IMMUTABLE_IMAGE.fullmatch(base_image) is None:
+            raise ValueError("base conformance image must use an immutable sha256 digest")
+        reasons = self.probe()
+        if reasons:
+            raise RuntimeError("; ".join(reasons))
+        from ..models.package import inspect_driver_package
+        payload = package_path.resolve(strict=True).read_bytes()
+        inspection = inspect_driver_package(
+            payload, expected_model_id=_manifest_model_id(payload),
+        )
+        with zipfile.ZipFile(package_path) as archive:
+            requirements = archive.read("requirements.lock") if "requirements.lock" in inspection.files else b""
+        with tempfile.TemporaryDirectory(prefix="audioenv-conformance-image-") as directory:
+            context = Path(directory)
+            dockerfile = [
+                f"FROM {base_image}", "USER root",
+                'LABEL org.opencontainers.image.source="https://github.com/SSDeb-RR/AudioEnv"',
+                f'LABEL ai.audioenv.driver-package-sha256="{inspection.sha256}"',
+            ]
+            if requirements:
+                (context / "requirements.lock").write_bytes(requirements)
+                dockerfile.extend((
+                    "COPY requirements.lock /tmp/requirements.lock",
+                    "RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock",
+                ))
+            dockerfile.extend(("USER 10001", "WORKDIR /workspace"))
+            (context / "Dockerfile").write_text("\n".join(dockerfile) + "\n", encoding="utf-8")
+            iid = context / "image.id"
+            process = subprocess.run(
+                [shutil.which("docker") or "docker", "build", "--network", "bridge",
+                 "--iidfile", str(iid), str(context)],
+                capture_output=True, text=True, timeout=1800, check=False,
+            )
+            if process.returncode or not iid.is_file():
+                raise RuntimeError("model conformance image build failed")
+            image = iid.read_text(encoding="utf-8").strip()
+        if _IMMUTABLE_IMAGE.fullmatch(image) is None:
+            raise RuntimeError("Docker did not return an immutable image ID")
+        return {
+            "schema_version": "audioenv.model-conformance-image/v1",
+            "image": image, "base_image": base_image,
+            "driver_package_sha256": inspection.sha256,
+            "requirements_locked": bool(requirements),
+        }
+
+
+def _manifest_model_id(payload: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        value = json.loads(archive.read("manifest.json")).get("model_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError("driver package manifest model_id is missing")
+    return value
 
 
 class ModelConformanceTransport(Protocol):

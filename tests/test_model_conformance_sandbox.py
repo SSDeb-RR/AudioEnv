@@ -5,7 +5,9 @@ from fastapi.testclient import TestClient
 
 from audioenv.contracts import ConformanceCheckV1, ModelConformanceReportV1
 from audioenv.integrations.model_conformance_sandbox import ModelConformanceSandbox
-from audioenv.integrations.model_conformance_sandbox import DockerModelConformanceTransport
+from audioenv.integrations.model_conformance_sandbox import (
+    DockerModelConformanceImageBuilder, DockerModelConformanceTransport,
+)
 from audioenv.models.conformance_worker import execute
 from audioenv.models.omni_driver import ModelConformanceRunner
 from audioenv.models.scaffold import build_driver_scaffold
@@ -218,3 +220,67 @@ def test_docker_transport_requires_digest_and_applies_isolation(monkeypatch, tmp
         assert "immutable" in str(exc)
     else:
         raise AssertionError("mutable conformance image was accepted")
+
+
+def test_dependency_image_build_copies_lock_but_not_driver_source(monkeypatch, tmp_path):
+    package = tmp_path / "driver.zip"
+    package.write_bytes(build_driver_scaffold(MODEL_ID, "/models/new", "novel"))
+    dockerfiles = []
+
+    class Result:
+        returncode = 0
+        stdout = '["name=rootless"]'
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        if command[1] == "build":
+            context = Path(command[-1])
+            dockerfiles.append((context / "Dockerfile").read_text())
+            Path(command[command.index("--iidfile") + 1]).write_text("sha256:" + "c" * 64)
+        return Result()
+
+    monkeypatch.setattr("audioenv.integrations.model_conformance_sandbox.shutil.which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr("audioenv.integrations.model_conformance_sandbox.subprocess.run", fake_run)
+    receipt = DockerModelConformanceImageBuilder().build(
+        package_path=package, base_image=IMAGE,
+    )
+    assert receipt["image"] == "sha256:" + "c" * 64
+    assert receipt["requirements_locked"] is False
+    assert "driver.zip" not in dockerfiles[0]
+    assert f"FROM {IMAGE}" in dockerfiles[0]
+
+
+def test_api_builds_and_trusts_dependency_image(tmp_path):
+    derived = "sha256:" + "d" * 64
+
+    class Builder:
+        def build(self, *, package_path, base_image):
+            return {
+                "schema_version": "audioenv.model-conformance-image/v1",
+                "image": derived, "base_image": base_image,
+                "driver_package_sha256": package_path.parent.name + package_path.name,
+                "requirements_locked": False,
+            }
+
+    app = create_app(
+        f"sqlite:///{tmp_path / 'builder.sqlite'}",
+        model_conformance_image_builder=Builder(),
+        trusted_model_conformance_images=(IMAGE,),
+    )
+    client = TestClient(app)
+    client.post("/api/models", json={
+        "id": MODEL_ID, "display_name": "Sandboxed Omni",
+        "adapter_type": "generated-needs-review", "role": "agent", "config": {},
+    })
+    client.post(
+        f"/api/models/{MODEL_ID}/driver-package",
+        content=build_driver_scaffold(MODEL_ID, "/models/new", "novel"),
+        headers={"content-type": "application/zip"},
+    )
+    result = client.post(
+        f"/api/models/{MODEL_ID}/conformance-image", json={"base_image": IMAGE},
+    )
+    assert result.status_code == 201, result.text
+    assert result.json()["image"] == derived
+    assert derived in app.state.trusted_model_conformance_images
+    assert app.state.repository.get_artifact(result.json()["artifact_id"]).kind == "model-conformance-image-receipt"
