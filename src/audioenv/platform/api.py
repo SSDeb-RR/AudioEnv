@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -24,7 +24,7 @@ from .db import Database, InvalidTransition, PlatformRepository, serialize_exper
 from ..artifacts import LocalArtifactStore
 from ..authoring import CustomTaskInput, DeterministicEnvironmentAuthor
 from ..evaluation import package_hashes
-from ..contracts import GPUExecutionPlanV1, PromotionEvidenceV1
+from ..contracts import GPUExecutionPlanV1, GPUWorkerExperimentV1, PromotionEvidenceV1
 from ..foundry import EnvironmentFoundry, ModelFoundry
 from ..harnesses import build_builtin_registry, resolve_compatibility
 from ..isolated_validation import IsolatedValidationError, IsolatedValidationRunner
@@ -74,6 +74,20 @@ class LaunchRequest(StrictRequest):
     confirmed: bool
     provider: str = "local-subprocess"
     confirmation_name: str | None = None
+    quote_id: str | None = None
+
+
+class RunPodQuoteRequest(StrictRequest):
+    image: str = Field(min_length=1, max_length=500)
+    image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    gpu_count: int = Field(default=8, ge=1)
+    gpu_memory_gb: int = Field(default=80, ge=1)
+    max_runtime_hours: float = Field(gt=0)
+    max_total_budget_usd: float = Field(ge=0)
+    network_volume_id: str | None = Field(default=None, max_length=500)
+    ssh_key_secret_name: str = Field(default="RUNPOD_SSH_KEY", pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+    api_key_secret_name: str = Field(default="RUNPOD_API_KEY", pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+    known_hosts_secret_name: str = Field(default="RUNPOD_KNOWN_HOSTS", pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
 
 
 class ModelProbeRequest(StrictRequest):
@@ -112,7 +126,11 @@ class CompatibilityRequest(StrictRequest):
     caller_id: str | None = None
 
 
-def create_app(database_url: str | None = None, *, static_dir: Path | None = None) -> FastAPI:
+def create_app(
+    database_url: str | None = None, *, static_dir: Path | None = None,
+    runpod_transport: Any | None = None,
+    runpod_executor_factory: Callable[[dict[str, Any], Any], Any] | None = None,
+) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
     database.create_schema()
@@ -135,6 +153,8 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
     app.state.environment_foundry = EnvironmentFoundry(data_root / "foundry" / "sources", app.state.artifacts)
     app.state.model_foundry = ModelFoundry(app.state.harness_registry, app.state.artifacts)
     app.state.validation_runner = IsolatedValidationRunner()
+    app.state.runpod_transport = runpod_transport
+    app.state.runpod_executor_factory = runpod_executor_factory
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -181,6 +201,7 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
             row = item.model_dump(mode="json")
             row.update({
                 "supports_quote": True,
+                "requires_quote": item.id in {"runpod-secure-cloud", "modal-sandbox"},
                 "estimated_cost_usd": 0.0 if item.id == "local-subprocess" else None,
             })
             rows.append(row)
@@ -553,21 +574,244 @@ def create_app(database_url: str | None = None, *, static_dir: Path | None = Non
     @app.post("/api/experiments/{experiment_id}/cancel")
     def cancel(experiment_id: str) -> dict[str, Any]:
         try:
-            return serialize_experiment(repository.request_cancel(experiment_id))
+            record = repository.request_cancel(experiment_id)
         except KeyError:
             raise HTTPException(404, "experiment not found") from None
         except InvalidTransition as exc:
             raise HTTPException(409, str(exc)) from exc
+        active = [
+            item for item in repository.list_compute_resources(experiment_id)
+            if item.provider == "runpod-secure-cloud"
+            and item.external_id and item.status in {"provisioning", "running", "cancelling"}
+        ]
+        if active:
+            from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
+            provider = RunPodSecureCloudProvider(
+                app.state.runpod_transport or RunPodRESTV2Transport()
+            )
+            for resource in active:
+                try:
+                    snapshot = json.loads(resource.config_json)
+                    runpod_config = RunPodConfig(**snapshot["config"])
+                    remote = provider.reconnect(resource.external_id or "")
+                    executor = _resolve_runpod_executor(app, remote, runpod_config, snapshot)
+                    if executor is not None and "worker_launch" in snapshot:
+                        provider.request_cancellation(executor, experiment_id)
+                    provider.cancel(resource.external_id or "")
+                    repository.update_compute_resource(resource.id, status="cancelled")
+                except Exception as exc:
+                    repository.update_compute_resource(resource.id, status="cancellation_failed")
+                    repository.add_log(
+                        experiment_id, "RunPod cancellation failed", level="error",
+                        payload={"resource_id": resource.id, "reason": str(exc)},
+                    )
+                    raise HTTPException(502, f"RunPod cancellation failed: {exc}") from exc
+            try:
+                record = repository.transition(experiment_id, "cancelled", {
+                    "provider": "runpod-secure-cloud",
+                    "resource_ids": [item.id for item in active],
+                })
+            except InvalidTransition as exc:
+                raise HTTPException(409, str(exc)) from exc
+        return serialize_experiment(record)
+
+    @app.get("/api/experiments/{experiment_id}/compute-resources")
+    def compute_resources(experiment_id: str) -> list[dict[str, Any]]:
+        if repository.get_experiment(experiment_id) is None:
+            raise HTTPException(404, "experiment not found")
+        return [_compute_resource(row) for row in repository.list_compute_resources(experiment_id)]
+
+    @app.post("/api/experiments/{experiment_id}/compute-resources/{resource_id}/reconcile")
+    def reconcile_compute_resource(experiment_id: str, resource_id: str) -> dict[str, Any]:
+        resource = repository.get_compute_resource(resource_id)
+        if resource is None or resource.experiment_id != experiment_id:
+            raise HTTPException(404, "compute resource not found")
+        if resource.provider != "runpod-secure-cloud" or not resource.external_id:
+            raise HTTPException(422, "compute resource cannot be reconciled")
+        from .runpod import RunPodRESTV2Transport, RunPodSecureCloudProvider
+        provider = RunPodSecureCloudProvider(
+            app.state.runpod_transport or RunPodRESTV2Transport()
+        )
+        try:
+            remote = provider.reconnect(resource.external_id)
+        except Exception as exc:
+            raise HTTPException(502, f"RunPod state refresh failed: {exc}") from exc
+        remote_status = str(remote.get("status", remote.get("desiredStatus", "unknown"))).lower()
+        mapped = {
+            "running": "provisioning", "stopped": "stopped", "exited": "stopped",
+            "terminated": "stopped", "created": "provisioning", "pending": "provisioning",
+        }.get(remote_status, resource.status)
+        snapshot = json.loads(resource.config_json)
+        if remote_status == "running" and "worker_launch" in snapshot:
+            mapped = "running"
+        snapshot["last_remote_state"] = {
+            key: remote[key] for key in (
+                "id", "status", "desiredStatus", "publicIp", "ssh_host", "sshHost",
+                "ssh_port", "sshPort",
+            ) if key in remote
+        }
+        resource = repository.update_compute_resource(resource.id, status=mapped, config=snapshot)
+        if remote_status == "running" and "worker_launch" not in snapshot:
+            try:
+                resource = _start_runpod_worker(app, repository, resource, remote)
+                repository.add_log(experiment_id, "RunPod GPU worker launched after reconnect", payload={
+                    "resource_id": resource.id, "external_id": resource.external_id,
+                })
+            except Exception as exc:
+                try:
+                    provider.cleanup(resource.external_id)
+                finally:
+                    repository.update_compute_resource(resource.id, status="failed")
+                raise HTTPException(502, f"RunPod worker launch failed; Pod stopped: {exc}") from exc
+        return _compute_resource(resource)
+
+    @app.post("/api/experiments/{experiment_id}/compute-resources/{resource_id}/sync")
+    def sync_compute_resource(experiment_id: str, resource_id: str) -> dict[str, Any]:
+        record = repository.get_experiment(experiment_id)
+        if record is None:
+            raise HTTPException(404, "experiment not found")
+        resource = repository.get_compute_resource(resource_id)
+        if resource is None or resource.experiment_id != experiment_id:
+            raise HTTPException(404, "compute resource not found")
+        if resource.provider != "runpod-secure-cloud" or not resource.external_id:
+            raise HTTPException(422, "compute resource cannot be synchronized")
+        snapshot = json.loads(resource.config_json)
+        if "worker_launch" not in snapshot:
+            raise HTTPException(409, "GPU worker has not launched")
+        from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
+        runpod_config = RunPodConfig(**snapshot["config"])
+        provider = RunPodSecureCloudProvider(
+            app.state.runpod_transport
+            or RunPodRESTV2Transport(api_key_env=runpod_config.api_key_secret_name)
+        )
+        try:
+            pod = provider.reconnect(resource.external_id)
+            executor = _resolve_runpod_executor(app, pod, runpod_config, snapshot)
+            if executor is None:
+                raise RuntimeError("SSH endpoint or key/known-host references are unavailable")
+            after = int(snapshot.get("synced_event_sequence", 0))
+            events = provider.stream_events(
+                executor, experiment_id=experiment_id, after_sequence=after,
+            )
+            terminal = None
+            for event in events:
+                if event.type == "metric":
+                    repository.add_metric(
+                        experiment_id, int(event.payload["step"]), str(event.payload["name"]),
+                        float(event.payload["value"]), str(event.payload.get("source", "gpu-worker")),
+                    )
+                elif event.type == "log":
+                    repository.add_log(
+                        experiment_id, str(event.payload.get("message", "")),
+                        payload={"gpu_event_sequence": event.sequence,
+                                 "channel": event.payload.get("channel")},
+                    )
+                else:
+                    repository.add_log(
+                        experiment_id, event.type, payload={
+                            "gpu_event_sequence": event.sequence, **event.payload,
+                        },
+                    )
+                if event.type in {"worker.completed", "worker.failed", "worker.cancelled"}:
+                    terminal = event
+            if events:
+                snapshot["synced_event_sequence"] = events[-1].sequence
+            artifacts: list[str] = []
+            if terminal and terminal.type == "worker.completed":
+                incoming = app.state.data_root / "incoming" / resource.id
+                for path in provider.collect_artifacts(
+                    executor, experiment_id=experiment_id, destination=incoming,
+                ):
+                    payload = path.read_bytes()
+                    media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
+                    stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
+                    kind = "checkpoint" if "checkpoint" in path.parts or "adapter" in path.name else "gpu_run_artifact"
+                    row = repository.add_artifact(
+                        stored.id, experiment_id=experiment_id, project_id=record.project_id,
+                        kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
+                        path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
+                    )
+                    artifacts.append(row.id)
+                _advance_gpu_terminal(repository, experiment_id, "completed")
+                provider.cleanup(resource.external_id)
+                resource = repository.update_compute_resource(resource.id, status="stopped", config=snapshot)
+            elif terminal and terminal.type == "worker.failed":
+                _advance_gpu_terminal(repository, experiment_id, "failed", terminal.payload)
+                provider.cleanup(resource.external_id)
+                resource = repository.update_compute_resource(resource.id, status="failed", config=snapshot)
+            elif terminal and terminal.type == "worker.cancelled":
+                _advance_gpu_terminal(repository, experiment_id, "cancelled", terminal.payload)
+                provider.cleanup(resource.external_id)
+                resource = repository.update_compute_resource(resource.id, status="cancelled", config=snapshot)
+            else:
+                current = repository.get_experiment(experiment_id)
+                if current and current.status == "queued" and events:
+                    repository.transition(experiment_id, "running", {"resource_id": resource.id})
+                resource = repository.update_compute_resource(resource.id, status="running", config=snapshot)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, f"RunPod synchronization failed: {exc}") from exc
+        return {
+            "resource": _compute_resource(resource), "events_synced": len(events),
+            "artifact_ids": artifacts,
+        }
+
+    @app.post("/api/experiments/{experiment_id}/runpod/quote", status_code=201)
+    def runpod_quote(experiment_id: str, request: RunPodQuoteRequest) -> dict[str, Any]:
+        record = repository.get_experiment(experiment_id)
+        if record is None:
+            raise HTTPException(404, "experiment not found")
+        config = json.loads(record.config_json)
+        reasons = _runpod_configuration_reasons(repository, config)
+        if reasons:
+            raise HTTPException(422, {"reasons": reasons})
+        from .runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
+        provider = RunPodSecureCloudProvider(
+            app.state.runpod_transport or RunPodRESTV2Transport(api_key_env=request.api_key_secret_name)
+        )
+        request_values = request.model_dump()
+        known_hosts_secret_name = request_values.pop("known_hosts_secret_name")
+        runpod_config = RunPodConfig(run_name=record.name, **request_values)
+        try:
+            worker_experiment = _gpu_worker_experiment(record.id, record.name, config)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            quote = provider.quote(runpod_config)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f"RunPod quote failed: {exc}") from exc
+        if not quote.available:
+            raise HTTPException(422, "no Secure Cloud GPU configuration satisfies availability and budget")
+        snapshot = {
+            "config": asdict(runpod_config), "quote": asdict(quote),
+            "experiment_config_hash": record.config_hash,
+            "known_hosts_secret_name": known_hosts_secret_name,
+            "worker_experiment": worker_experiment.model_dump(mode="json"),
+        }
+        resource = repository.create_compute_resource(
+            experiment_id=experiment_id, provider=provider.provider_id,
+            status="quoted", config=snapshot,
+        )
+        repository.add_log(experiment_id, "RunPod quote persisted for review", payload={
+            "resource_id": resource.id, "hourly_price_usd": quote.hourly_price_usd,
+            "maximum_cost_usd": quote.maximum_cost_usd,
+        })
+        return _compute_resource(resource)
 
     @app.post("/api/experiments/{experiment_id}/launch", status_code=202)
     def launch(experiment_id: str, request: LaunchRequest) -> dict[str, Any]:
         if not request.confirmed:
             raise HTTPException(400, "launch requires explicit confirmation")
-        if request.provider != "local-subprocess":
-            raise HTTPException(422, "RunPod is blocked until a live quote and paid-run approval are supplied")
         record = repository.get_experiment(experiment_id)
         if record is None:
             raise HTTPException(404, "experiment not found")
+        if request.provider == "runpod-secure-cloud":
+            return _launch_runpod(
+                app, repository, record, request.quote_id, request.confirmation_name,
+            )
+        if request.provider != "local-subprocess":
+            raise HTTPException(422, "unsupported execution provider")
         config = json.loads(record.config_json)
         check = _preflight(repository, config)
         repository.set_preflight(experiment_id, check)
@@ -741,6 +985,18 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
     provider_id = config.get("provider_id", "local-subprocess")
     environment_id = config.get("environment_id")
     agent_id = config.get("agent_model_id", "audioenv/small-audio-tool-policy")
+    if provider_id == "runpod-secure-cloud":
+        reasons = _runpod_configuration_reasons(repository, config)
+        return {
+            "available": not reasons, "reasons": reasons, "trainer_id": trainer_id,
+            "provider_id": provider_id, "environment_id": environment_id,
+            "agent_model_id": agent_id,
+            "hardware": {"device_type": "Secure Cloud GPU selected by live quote", "device_count": 8},
+            "cost": {"status": "quote_required", "estimated_usd": None,
+                     "basis": "live RunPod quote required before launch"},
+            "resource_estimate": None, "launch_requires_quote": True,
+            "gpu_acceptance_status": "not_run",
+        }
     if trainer_id not in {"audioenv/small-audio-reinforce", "audioenv/tiny-reinforce"}:
         reasons.append("trainer is not available on the local provider")
     if provider_id != "local-subprocess":
@@ -773,8 +1029,206 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
     }
 
 
+def _runpod_configuration_reasons(
+    repository: PlatformRepository, config: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if config.get("provider_id") != "runpod-secure-cloud":
+        reasons.append("experiment provider must be runpod-secure-cloud")
+    trainer_id = config.get("trainer_id")
+    if trainer_id not in {
+        "qwen3-omni-thinker-gspo-lora", "qwen3-omni-thinker-grpo-lora",
+    }:
+        reasons.append("RunPod Qwen execution requires the GSPO or GRPO LoRA trainer")
+    environment = repository.get_environment(config.get("environment_id", ""))
+    if environment is None or environment.authoring_status != "validated":
+        reasons.append("select a validated environment version")
+    model = repository.get_model(config.get("agent_model_id", ""))
+    if model is None or model.adapter_type != "qwen3-omni":
+        reasons.append("select a registered Qwen3-Omni agent model")
+    try:
+        _gpu_worker_experiment("preflight", "preflight", config)
+    except ValueError as exc:
+        reasons.append(str(exc))
+    return reasons
+
+
+def _gpu_worker_experiment(
+    experiment_id: str, run_name: str, config: dict[str, Any],
+) -> GPUWorkerExperimentV1:
+    gpu = config.get("gpu_worker")
+    if not isinstance(gpu, dict):
+        raise ValueError("complete gpu_worker paths are required before a RunPod quote")
+    trainer = config.get("trainer_id")
+    algorithm = "gspo" if trainer == "qwen3-omni-thinker-gspo-lora" else "grpo"
+    try:
+        return GPUWorkerExperimentV1(
+            experiment_id=experiment_id, run_name=run_name, backend="qwen3-omni-verl",
+            trainer=trainer, algorithm=algorithm,
+            environment_manifest=gpu.get("environment_manifest"),
+            model_path=gpu.get("model_path"), caller_model_path=gpu.get("caller_model_path"),
+            rollout_dataset_path=gpu.get("rollout_dataset_path"),
+            validation_dataset_path=gpu.get("validation_dataset_path"),
+            verl_checkout=gpu.get("verl_checkout"), tau2_checkout=gpu.get("tau2_checkout"),
+            output_dir=f"/workspace/runs/{experiment_id}/output",
+            cancellation_file=f"/workspace/runs/{experiment_id}/cancel.requested",
+            hyperparameters=config.get("hyperparameters", {}),
+            dependency_pins=gpu.get("dependency_pins", {}),
+            resume_from=gpu.get("resume_from"),
+        )
+    except Exception as exc:
+        raise ValueError(f"invalid gpu_worker experiment: {exc}") from exc
+
+
+def _start_runpod_worker(app, repository: PlatformRepository, resource, pod: dict[str, Any]):
+    from .runpod import RunPodConfig, RunPodSecureCloudProvider
+    snapshot = json.loads(resource.config_json)
+    runpod_config = RunPodConfig(**snapshot["config"])
+    executor = _resolve_runpod_executor(app, pod, runpod_config, snapshot)
+    if executor is None:
+        return resource
+    experiment = GPUWorkerExperimentV1.model_validate(snapshot["worker_experiment"])
+    provider = RunPodSecureCloudProvider(app.state.runpod_transport)
+    staged_path = provider.stage(executor, experiment)
+    launch = provider.launch(executor, staged_path)
+    snapshot["worker_launch"] = {"experiment_path": staged_path, **launch}
+    resource = repository.update_compute_resource(resource.id, status="running", config=snapshot)
+    return resource
+
+
+def _resolve_runpod_executor(app, pod: dict[str, Any], runpod_config, snapshot: dict[str, Any]):
+    from .runpod import OpenSSHRemoteExecutor
+    if app.state.runpod_executor_factory is not None:
+        return app.state.runpod_executor_factory(pod, runpod_config)
+    host = pod.get("ssh_host", pod.get("sshHost", pod.get("publicIp")))
+    port = int(pod.get("ssh_port", pod.get("sshPort", 22)))
+    key_value = os.environ.get(runpod_config.ssh_key_secret_name)
+    known_value = os.environ.get(snapshot.get("known_hosts_secret_name", "RUNPOD_KNOWN_HOSTS"))
+    if not host or not key_value or not known_value:
+        return None
+    return OpenSSHRemoteExecutor(
+        host=str(host), port=port, key_path=Path(key_value),
+        known_hosts_path=Path(known_value),
+    )
+
+
+def _advance_gpu_terminal(
+    repository: PlatformRepository, experiment_id: str, target: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    current = repository.get_experiment(experiment_id)
+    if current is None:
+        raise KeyError(experiment_id)
+    if current.status == "queued":
+        current = repository.transition(experiment_id, "running", {"source": "gpu-worker"})
+    if target == "completed":
+        if current.status == "running":
+            current = repository.transition(experiment_id, "evaluating", {"source": "gpu-worker"})
+        if current.status == "evaluating":
+            repository.transition(experiment_id, "completed", payload or {})
+    elif target in {"failed", "cancelled"} and current.status not in {"completed", "failed", "cancelled"}:
+        repository.transition(experiment_id, target, payload or {})
+
+
+def _launch_runpod(app, repository: PlatformRepository, record, quote_id, confirmation_name):
+    if confirmation_name != record.name:
+        raise HTTPException(400, "typed confirmation must exactly match the run name")
+    if not quote_id:
+        raise HTTPException(422, "a persisted RunPod quote is required")
+    resource = repository.get_compute_resource(quote_id)
+    if (
+        resource is None or resource.experiment_id != record.id
+        or resource.provider != "runpod-secure-cloud" or resource.status != "quoted"
+    ):
+        raise HTTPException(422, "RunPod quote is missing, stale, or belongs to another experiment")
+    snapshot = json.loads(resource.config_json)
+    if snapshot.get("experiment_config_hash") != record.config_hash:
+        raise HTTPException(409, "experiment configuration changed after the quote")
+    from .runpod import (
+        RunPodConfig, RunPodQuote, RunPodRESTV2Transport, RunPodSecureCloudProvider,
+    )
+    runpod_config = RunPodConfig(**snapshot["config"])
+    reviewed_quote = RunPodQuote(**snapshot["quote"])
+    provider = RunPodSecureCloudProvider(
+        app.state.runpod_transport
+        or RunPodRESTV2Transport(api_key_env=runpod_config.api_key_secret_name)
+    )
+    try:
+        fresh_quote = provider.quote(runpod_config)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(422, f"RunPod quote refresh failed: {exc}") from exc
+    if fresh_quote != reviewed_quote:
+        updated = dict(snapshot)
+        updated["refreshed_quote"] = asdict(fresh_quote)
+        repository.update_compute_resource(resource.id, status="requote_required", config=updated)
+        raise HTTPException(409, "RunPod price or availability changed; review a fresh quote")
+    try:
+        repository.transition(record.id, "validating")
+        pod = provider.provision(
+            runpod_config, fresh_quote, confirmation_name=confirmation_name or "",
+        )
+        external_id = str(pod.get("id", ""))
+        if not external_id:
+            raise RuntimeError("RunPod create response did not include a Pod id")
+        resource = repository.update_compute_resource(
+            resource.id, status="provisioning", external_id=external_id,
+        )
+        remote_status = str(pod.get("status", pod.get("desiredStatus", ""))).lower()
+        if remote_status == "running":
+            resource = _start_runpod_worker(app, repository, resource, pod)
+        repository.transition(record.id, "queued", {
+            "provider": provider.provider_id, "resource_id": resource.id,
+            "external_id": external_id,
+        })
+    except InvalidTransition as exc:
+        if resource.external_id:
+            try:
+                provider.cleanup(resource.external_id)
+            except Exception:
+                pass
+            repository.update_compute_resource(resource.id, status="failed")
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        if resource.external_id:
+            try:
+                provider.cleanup(resource.external_id)
+            except Exception:
+                pass
+        try:
+            repository.transition(record.id, "failed", {"reason": f"RunPod provisioning failed: {exc}"})
+        except InvalidTransition:
+            pass
+        repository.update_compute_resource(resource.id, status="failed")
+        raise HTTPException(502, f"RunPod provisioning failed: {exc}") from exc
+    message = (
+        "RunPod GPU worker launched" if resource.status == "running"
+        else "RunPod Pod provisioned; awaiting worker connection"
+    )
+    repository.add_log(record.id, message, payload={
+        "resource_id": resource.id, "external_id": resource.external_id,
+        "maximum_cost_usd": reviewed_quote.maximum_cost_usd,
+    })
+    return {
+        "resource": _compute_resource(resource), "preflight": {
+            "available": True, "provider_id": provider.provider_id,
+            "hardware": {"device_type": reviewed_quote.gpu_type_id,
+                         "device_count": reviewed_quote.gpu_count},
+            "cost": {"status": "quoted", "estimated_usd": reviewed_quote.maximum_cost_usd,
+                     "basis": f"{reviewed_quote.hourly_price_usd}/hour maximum"},
+        },
+    }
+
+
 def _project(row) -> dict[str, Any]:
     return {"id": row.id, "name": row.name, "description": row.description, "created_at": row.created_at.isoformat()}
+
+
+def _compute_resource(row) -> dict[str, Any]:
+    return {
+        "id": row.id, "experiment_id": row.experiment_id, "provider": row.provider,
+        "external_id": row.external_id, "status": row.status,
+        "config": json.loads(row.config_json), "created_at": row.created_at.isoformat(),
+    }
 
 
 def _model(row) -> dict[str, Any]:

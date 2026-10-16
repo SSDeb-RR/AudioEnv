@@ -519,6 +519,47 @@ class PlatformRepository:
             session.commit()
             return record
 
+    def create_compute_resource(
+        self, *, experiment_id: str, provider: str, status: str, config: dict[str, Any],
+        external_id: str | None = None,
+    ) -> ExternalComputeResourceRecord:
+        with self.database.session() as session:
+            if session.get(ExperimentRecord, experiment_id) is None:
+                raise KeyError(experiment_id)
+            record = ExternalComputeResourceRecord(
+                id=str(uuid4()), experiment_id=experiment_id, provider=provider,
+                external_id=external_id, status=status, config_json=_dump(config),
+            )
+            session.add(record)
+            session.commit()
+            return record
+
+    def get_compute_resource(self, resource_id: str) -> ExternalComputeResourceRecord | None:
+        with self.database.session() as session:
+            return session.get(ExternalComputeResourceRecord, resource_id)
+
+    def list_compute_resources(self, experiment_id: str) -> list[ExternalComputeResourceRecord]:
+        with self.database.session() as session:
+            return list(session.scalars(select(ExternalComputeResourceRecord).where(
+                ExternalComputeResourceRecord.experiment_id == experiment_id
+            ).order_by(ExternalComputeResourceRecord.created_at.desc())))
+
+    def update_compute_resource(
+        self, resource_id: str, *, status: str, external_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> ExternalComputeResourceRecord:
+        with self.database.session() as session:
+            record = session.get(ExternalComputeResourceRecord, resource_id)
+            if record is None:
+                raise KeyError(resource_id)
+            record.status = status
+            if external_id is not None:
+                record.external_id = external_id
+            if config is not None:
+                record.config_json = _dump(config)
+            session.commit()
+            return record
+
     def add_log(self, experiment_id: str, message: str, *, level: str = "info", payload: dict[str, Any] | None = None) -> WorkerLogRecord:
         record = WorkerLogRecord(experiment_id=experiment_id, level=level, message=message, payload_json=_dump(payload or {}))
         with self.database.session() as session:

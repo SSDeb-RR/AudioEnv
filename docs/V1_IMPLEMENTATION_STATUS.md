@@ -52,6 +52,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   covered with fake transports. Large model/checkpoint and source directories
   must be pre-positioned on the Pod workspace or persistent volume. Tests and
   startup never create paid compute.
+- The persisted product workflow now validates and binds a complete
+  `GPUWorkerExperimentV1` to each quote, refreshes the quote before paid
+  provisioning, stages and launches the exact bundle only after the Pod is
+  ready, replays typed events into database logs/metrics, imports verified
+  artifacts, supports reconnect and cancellation, and stops compute on every
+  terminal worker event. The dashboard exposes configuration, quote review,
+  exact typed approval, resource status, sync, and stop controls.
 - A Modal Sandbox provider uses the same immutable GPU-worker experiment and
   event contracts. It implements quote hashing, exact-name confirmation,
   gVisor runtime selection, named-secret references, volume staging,
@@ -211,14 +218,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-118 passed
+121 passed
 
 uv run audioenv validate
 389 passed, 0 failed
 
 cd web && npm run build && npm run test:e2e
 Vite production build passed
-2 Playwright product-flow tests passed
+3 Playwright product-flow tests passed
 
 uv build
 audioenv_foundry-0.5.0 wheel and sdist built

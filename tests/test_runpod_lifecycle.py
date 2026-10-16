@@ -1,10 +1,13 @@
+from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from audioenv.contracts import GPUWorkerEventV1, GPUWorkerExperimentV1
+from audioenv.platform.api import create_app
 from audioenv.platform.runpod import RunPodConfig, RunPodSecureCloudProvider
 
 
@@ -172,3 +175,202 @@ def test_runpod_stages_local_small_inputs_and_requires_remote_large_resources(tm
     invalid = bundle.model_copy(update={"model_path": str(tmp_path / "model")})
     with pytest.raises(ValueError, match="model_path must already exist"):
         provider.stage(FakeRemote(), invalid)
+
+
+def test_runpod_quote_review_and_exact_confirmation_are_persisted_product_flow(tmp_path):
+    transport = FakeTransport()
+    remote = FakeRemote()
+    client = TestClient(create_app(
+        f"sqlite:///{tmp_path / 'product.sqlite'}", runpod_transport=transport,
+        runpod_executor_factory=lambda _pod, _config: remote,
+    ))
+    project = client.get("/api/projects").json()[0]
+    environment = client.get("/api/environments").json()[0]
+    model_id = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+    assert client.post("/api/models", json={
+        "id": model_id, "display_name": "Qwen3 Omni", "adapter_type": "qwen3-omni",
+        "role": "both", "project_id": project["id"],
+        "config": {"checkpoint": "/runpod-volume/models/qwen"},
+    }).status_code == 201
+    experiment_response = client.post("/api/experiments", json={
+        "name": "Paid Qwen proof", "project_id": project["id"], "config": {
+            "project_id": project["id"], "environment_id": environment["id"],
+            "agent_model_id": model_id, "caller_model_id": model_id,
+            "trainer_id": "qwen3-omni-thinker-gspo-lora",
+            "provider_id": "runpod-secure-cloud", "reward_version": "tau2-v1",
+            "gpu_worker": {
+                "environment_manifest": "/runpod-volume/tau2/environment.json",
+                "model_path": "/runpod-volume/models/qwen",
+                "caller_model_path": "/runpod-volume/models/qwen",
+                "rollout_dataset_path": "/runpod-volume/tau2/train.jsonl",
+                "validation_dataset_path": "/runpod-volume/tau2/test.jsonl",
+                "verl_checkout": "/workspace/verl-omni", "tau2_checkout": "/workspace/tau2",
+            },
+        },
+    })
+    assert experiment_response.status_code == 201
+    experiment_id = experiment_response.json()["id"]
+    quote_response = client.post(f"/api/experiments/{experiment_id}/runpod/quote", json={
+        "image": "registry.example/audioenv-gpu:v1",
+        "image_digest": "sha256:" + "a" * 64,
+        "max_runtime_hours": 2, "max_total_budget_usd": 40,
+        "network_volume_id": "volume-1",
+    })
+    assert quote_response.status_code == 201, quote_response.text
+    quote = quote_response.json()
+    assert quote["status"] == "quoted"
+    assert quote["config"]["quote"]["maximum_cost_usd"] == 32
+    assert "RUNPOD_API_KEY" in quote_response.text
+    assert "secret-value" not in quote_response.text
+    assert transport.created == []
+
+    wrong = client.post(f"/api/experiments/{experiment_id}/launch", json={
+        "confirmed": True, "provider": "runpod-secure-cloud",
+        "quote_id": quote["id"], "confirmation_name": "wrong",
+    })
+    assert wrong.status_code == 400
+    assert transport.created == []
+
+    launched = client.post(f"/api/experiments/{experiment_id}/launch", json={
+        "confirmed": True, "provider": "runpod-secure-cloud",
+        "quote_id": quote["id"], "confirmation_name": "Paid Qwen proof",
+    })
+    assert launched.status_code == 202, launched.text
+    assert launched.json()["resource"]["status"] == "running"
+    assert launched.json()["resource"]["external_id"] == "pod-1"
+    assert transport.created[0]["image"].endswith("@sha256:" + "a" * 64)
+    resources = client.get(f"/api/experiments/{experiment_id}/compute-resources").json()
+    assert resources[0]["status"] == "running"
+    assert client.get(f"/api/experiments/{experiment_id}").json()["status"] == "queued"
+    reconciled = client.post(
+        f"/api/experiments/{experiment_id}/compute-resources/{quote['id']}/reconcile",
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["status"] == "running"
+    gpu_events = [
+        GPUWorkerEventV1(
+            sequence=1, experiment_id=experiment_id, type="worker.started",
+            timestamp="2026-10-16T00:00:00Z", payload={"backend": "qwen3-omni-verl"},
+        ).model_dump_json(),
+        GPUWorkerEventV1(
+            sequence=2, experiment_id=experiment_id, type="metric",
+            timestamp="2026-10-16T00:00:01Z",
+            payload={"step": 1, "name": "loss", "value": 0.5, "source": "verl"},
+        ).model_dump_json(),
+    ]
+    remote.files[f"/workspace/runs/{experiment_id}/output/events.jsonl"] = (
+        "\n".join(gpu_events) + "\n"
+    ).encode()
+    synced = client.post(
+        f"/api/experiments/{experiment_id}/compute-resources/{quote['id']}/sync",
+    )
+    assert synced.status_code == 200, synced.text
+    assert synced.json()["events_synced"] == 2
+    assert client.get(f"/api/experiments/{experiment_id}/metrics").json()[0]["value"] == 0.5
+    assert client.get(f"/api/experiments/{experiment_id}").json()["status"] == "running"
+    cancelled = client.post(f"/api/experiments/{experiment_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert transport.stopped == ["pod-1"]
+
+
+def test_runpod_launch_rejects_changed_quote_before_provisioning(tmp_path):
+    transport = FakeTransport()
+    client = TestClient(create_app(
+        f"sqlite:///{tmp_path / 'requote.sqlite'}", runpod_transport=transport,
+    ))
+    project = client.get("/api/projects").json()[0]
+    environment = client.get("/api/environments").json()[0]
+    model_id = "local-qwen"
+    client.post("/api/models", json={
+        "id": model_id, "display_name": "Qwen", "adapter_type": "qwen3-omni",
+        "role": "both", "config": {"checkpoint": "/runpod-volume/qwen"},
+    })
+    experiment = client.post("/api/experiments", json={
+        "name": "Requote proof", "project_id": project["id"], "config": {
+            "environment_id": environment["id"], "agent_model_id": model_id,
+            "trainer_id": "qwen3-omni-thinker-gspo-lora",
+            "provider_id": "runpod-secure-cloud",
+            "gpu_worker": {
+                "environment_manifest": "/runpod-volume/tau2/environment.json",
+                "model_path": "/runpod-volume/models/qwen",
+                "caller_model_path": "/runpod-volume/models/qwen",
+                "rollout_dataset_path": "/runpod-volume/tau2/train.jsonl",
+                "validation_dataset_path": "/runpod-volume/tau2/test.jsonl",
+                "verl_checkout": "/workspace/verl-omni", "tau2_checkout": "/workspace/tau2",
+            },
+        },
+    }).json()
+    quote = client.post(f"/api/experiments/{experiment['id']}/runpod/quote", json={
+        "image": "registry/audioenv:v1", "image_digest": "sha256:" + "b" * 64,
+        "max_runtime_hours": 2, "max_total_budget_usd": 100,
+    }).json()
+    transport.list_gpu_types = lambda: [{
+        "id": "H100-80GB", "memory_gb": 80, "secure_cloud_available": 8,
+        "price_per_gpu_hour": 2.5,
+    }]
+    response = client.post(f"/api/experiments/{experiment['id']}/launch", json={
+        "confirmed": True, "provider": "runpod-secure-cloud", "quote_id": quote["id"],
+        "confirmation_name": "Requote proof",
+    })
+    assert response.status_code == 409
+    assert transport.created == []
+    resources = client.get(f"/api/experiments/{experiment['id']}/compute-resources").json()
+    assert resources[0]["status"] == "requote_required"
+
+
+def test_runpod_terminal_sync_collects_artifacts_completes_and_stops_compute(tmp_path):
+    transport = FakeTransport()
+    remote = FakeRemote()
+    app = create_app(
+        f"sqlite:///{tmp_path / 'terminal.sqlite'}", runpod_transport=transport,
+        runpod_executor_factory=lambda _pod, _config: remote,
+    )
+    repository = app.state.repository
+    run = repository.create_experiment("Terminal GPU run", {"provider_id": "runpod-secure-cloud"})
+    repository.transition(run.id, "validating")
+    repository.transition(run.id, "queued")
+    bundle = GPUWorkerExperimentV1(
+        experiment_id=run.id, run_name=run.name, backend="tiny-cpu-proof",
+        trainer="audioenv/small-audio-reinforce", algorithm="reinforce",
+        output_dir=f"/workspace/runs/{run.id}/output",
+        cancellation_file=f"/workspace/runs/{run.id}/cancel.requested",
+    )
+    config = RunPodConfig(
+        run_name=run.name, image_digest="sha256:" + "c" * 64,
+        max_runtime_hours=1, max_total_budget_usd=20,
+    )
+    resource = repository.create_compute_resource(
+        experiment_id=run.id, provider="runpod-secure-cloud", status="running",
+        external_id="pod-1", config={
+            "config": asdict(config), "worker_experiment": bundle.model_dump(mode="json"),
+            "worker_launch": {"experiment_path": f"/workspace/runs/{run.id}/experiment.json"},
+        },
+    )
+    checkpoint = b"trained adapter"
+    root = f"/workspace/runs/{run.id}/output"
+    remote.files[f"{root}/events.jsonl"] = (
+        GPUWorkerEventV1(
+            sequence=1, experiment_id=run.id, type="worker.completed",
+            timestamp="2026-10-16T00:00:00Z", payload={"artifact_count": 1},
+        ).model_dump_json() + "\n"
+    ).encode()
+    remote.files[f"{root}/checkpoints/adapter.bin"] = checkpoint
+    remote.files[f"{root}/worker-artifacts.json"] = json.dumps([{
+        "path": "checkpoints/adapter.bin", "size_bytes": len(checkpoint),
+        "sha256": sha256(checkpoint).hexdigest(),
+    }]).encode()
+
+    client = TestClient(app)
+    response = client.post(
+        f"/api/experiments/{run.id}/compute-resources/{resource.id}/sync",
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["events_synced"] == 1
+    assert len(response.json()["artifact_ids"]) == 1
+    assert response.json()["resource"]["status"] == "stopped"
+    assert client.get(f"/api/experiments/{run.id}").json()["status"] == "completed"
+    artifacts = client.get("/api/artifacts").json()
+    assert artifacts[0]["kind"] == "checkpoint"
+    assert client.get(artifacts[0]["download_url"]).content == checkpoint
+    assert transport.stopped == ["pod-1"]

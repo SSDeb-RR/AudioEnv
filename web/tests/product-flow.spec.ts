@@ -48,3 +48,25 @@ test("analyze repository and onboard an Omni model through the foundry", async (
   await modelBuild.evaluate((element: HTMLDetailsElement) => { element.open = true; });
   await expect(modelBuild.getByText(/native-audio generation/)).toBeVisible();
 });
+
+test("configure the guarded RunPod quote workflow without provisioning", async ({ page, request }) => {
+  const modelId = `playwright-qwen-${Date.now()}`;
+  const registered = await request.post("/api/models", { data: {
+    id: modelId, display_name: "Playwright Qwen3 Omni", adapter_type: "qwen3-omni",
+    role: "both", config: { checkpoint: "/runpod-volume/models/qwen" },
+  }});
+  expect(registered.ok()).toBeTruthy();
+
+  await page.goto("/runs");
+  await page.getByRole("button", { name: "New training run" }).click();
+  await page.getByLabel("Provider").selectOption("runpod-secure-cloud");
+  await page.getByLabel("Agent").selectOption(modelId);
+  await page.getByLabel("Caller").selectOption("audioenv/omni-caller");
+  await page.getByLabel("Trainer").selectOption("qwen3-omni-thinker-gspo-lora");
+  await page.getByLabel("Run name").fill("Playwright guarded GPU run");
+  await page.getByLabel("Image digest").fill(`sha256:${"a".repeat(64)}`);
+  await page.getByRole("button", { name: "Run preflight" }).click();
+  await expect(page.getByText("Preflight passed")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request live RunPod quote" })).toBeEnabled();
+  await expect(page.getByText(/live quote required/i)).toBeVisible();
+});

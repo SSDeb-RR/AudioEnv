@@ -101,6 +101,16 @@ This lifecycle is covered by local transport tests. The REST and SSH paths
 have not contacted RunPod, and no live Pod has been provisioned. Consequently
 the provider remains integration-ready rather than GPU-accepted.
 
+The FastAPI control plane persists the live quote and exact worker experiment
+as one immutable review snapshot. Launch refreshes the quote and rejects price
+or availability drift before provisioning. A ready Pod is not marked running
+until that exact bundle has been staged and `audioenv-gpu-worker` has started.
+The sync endpoint replays only unseen contiguous events into persisted logs and
+metrics, imports hash-verified artifacts into content-addressed storage, drives
+the experiment to its terminal state, and stops compute. The dashboard exposes
+the same quote, exact-name confirmation, synchronization, and cancellation
+workflow without treating mocked transport acceptance as real GPU acceptance.
+
 ## Image build policy
 
 [`docker/gpu-worker/Dockerfile`](../docker/gpu-worker/Dockerfile) has no default

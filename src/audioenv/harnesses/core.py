@@ -186,7 +186,7 @@ def build_builtin_registry() -> HarnessRegistry:
         ),
         HarnessDescriptor(
             id="runpod-secure-cloud", kind="provider", display_name="RunPod Secure Cloud",
-            status="blocked", status_reason="live REST, SSH, and artifact transport not verified",
+            status="needs_review", status_reason="quote and guarded launch available; paid GPU acceptance not run",
             capabilities=("cuda", "distributed", "persistent-volume"),
         ),
         HarnessDescriptor(
