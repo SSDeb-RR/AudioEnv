@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from audioenv.integrations.tau2_worker import RetailWorker
+from audioenv.integrations.tau2_worker import RetailWorker, _reference_summary
 from audioenv.integrations.tau2_client import (
     Tau2WorkerClient,
     Tau2WorkerError,
@@ -78,3 +78,27 @@ def test_tau2_private_caller_context_is_separate_from_public_reset():
     assert worker.handle({"operation": "caller_context", "session_id": "session"}) == {
         "user_scenario": {"instructions": {"reason_for_call": "refund"}},
     }
+
+
+def test_tau2_reference_validation_is_disabled_in_rollout_workers(monkeypatch):
+    monkeypatch.delenv("AUDIOENV_TAU2_VALIDATION_MODE", raising=False)
+    worker = object.__new__(RetailWorker)
+    with pytest.raises(PermissionError, match="disabled in rollout workers"):
+        worker.handle({"operation": "validate_reference", "task_id": "0"})
+
+
+def test_tau2_reference_evidence_redacts_protected_trajectory_details():
+    summary = _reference_summary("0", {
+        "upstream_reward": 1.0, "upstream_environment_reward": 1.0,
+        "db_match": True, "user_db_match": True,
+        "reward_info": {
+            "reward": 1.0, "reward_basis": ["DB"], "reward_breakdown": {"DB": 1.0},
+            "db_check": {"db_match": True},
+            "action_checks": [{"action": {"name": "protected_tool"}}],
+            "communicate_checks": [{"criteria": "protected text"}],
+        },
+    })
+    serialized = json.dumps(summary)
+    assert summary["upstream_reward"] == 1.0
+    assert "protected_tool" not in serialized
+    assert "protected text" not in serialized

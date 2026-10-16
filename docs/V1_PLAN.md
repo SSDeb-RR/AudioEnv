@@ -36,8 +36,9 @@ Pinned research integration revisions at audit time:
 - Milestone 1: complete for the local product. `audioenv app` packages and
   serves the SPA/API, migrations, lifecycle, logs, projects, and recovery.
 - Milestone 2: reference V2, custom authoring, and EnvHarness proof complete.
-  The pinned τ² Python 3.12 JSONL worker is implemented but not executed on the
-  current host, so upstream parity remains partial.
+  The pinned τ² Python 3.12 JSONL worker has live no-op and protected-reference
+  evidence against the official evaluator for every retail reward-basis
+  combination. Arbitrary repository execution remains OCI-sandbox gated.
 - Milestone 3: adapter and preflight code complete, GPU execution blocked.
 - Milestone 4: non-oracle CPU trainer, resume/checkpoint state, and reload gate
   complete. VeRL agent-loop batch bridge is implemented; GPU execution blocked.

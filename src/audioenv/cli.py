@@ -102,6 +102,12 @@ def main(argv: list[str] | None = None) -> int:
     tau2_dataset.add_argument("--checkpoint-id", default="base")
     tau2_dataset.add_argument("--seed", type=int, action="append", dest="seeds")
     tau2_dataset.add_argument("--limit", type=int)
+    tau2_validate = subparsers.add_parser(
+        "tau2-validate-reference",
+        help="Run a protected upstream reference trajectory through the official evaluator",
+    )
+    tau2_validate.add_argument("--checkout", type=Path, required=True)
+    tau2_validate.add_argument("--task-id", action="append", dest="task_ids")
     args = parser.parse_args(argv)
 
     package = build_reference_package()
@@ -256,6 +262,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(json.dumps(asdict(manifest), indent=2, sort_keys=True))
         return 0
+    if args.command == "tau2-validate-reference":
+        from .adapters.tau2 import Tau2RetailSourceAdapter
+
+        with Tau2RetailSourceAdapter().open_worker(
+            args.checkout.resolve(), timeout_seconds=120, validation_mode=True,
+        ) as client:
+            results = [
+                client.validate_reference(task_id)
+                for task_id in (args.task_ids or ("0", "33"))
+            ]
+        report = {"passed": all(
+            item.get("upstream_reward") == 1.0
+            and item.get("upstream_environment_reward") == 1.0
+            for item in results
+        ), "results": results}
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["passed"] else 1
     if args.command == "platform-demo":
         from .platform.db import Database, PlatformRepository, serialize_experiment
         from .platform.execution import LocalExecutionProvider

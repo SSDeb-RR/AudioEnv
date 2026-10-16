@@ -183,8 +183,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   results, and invokes τ²'s official `EvaluationType.ALL` evaluator after an
   explicit terminal action. A live no-op episode returned the complete
   upstream reward breakdown at `0.0`. Official train/test membership is
-  preserved instead of being overwritten by the aggregate `base` list. Gold
-  trajectory parity across every reward basis is not yet claimed.
+  preserved instead of being overwritten by the aggregate `base` list. The
+  explicitly gated `tau2-validate-reference` command replayed upstream
+  reference actions for tasks `0` and `33`, covering both retail reward-basis
+  combinations (`DB+NL_ASSERTION` and `DB`); τ²'s official evaluator returned
+  `1.0` for both the full and environment rewards. The command returns only a
+  redacted reward summary and is disabled in ordinary rollout workers.
 - Declarative in-process environments now receive backend-issued promotion
   evidence only after a constrained subprocess independently reconstructs the
   environment and reproduces both its environment and verifier hashes. The
@@ -233,7 +237,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-127 passed
+129 passed
 
 uv run audioenv validate
 389 passed, 0 failed

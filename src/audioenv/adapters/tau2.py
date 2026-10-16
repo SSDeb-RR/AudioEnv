@@ -105,14 +105,21 @@ class Tau2RetailSourceAdapter:
             "python", str(worker),
         )
 
-    def open_worker(self, checkout: Path, *, timeout_seconds: float = 30.0):
+    def open_worker(
+        self, checkout: Path, *, timeout_seconds: float = 30.0,
+        validation_mode: bool = False,
+    ):
         """Create, but do not silently install or provision, the pinned worker."""
         inspection = self.worker_probe(checkout)
         if not inspection["executable"]:
             raise RuntimeError(f"tau2 worker preflight failed: {inspection}")
         from ..integrations.tau2_client import Tau2WorkerClient
 
-        return Tau2WorkerClient(self.worker_command(checkout), timeout_seconds=timeout_seconds)
+        environment = {"AUDIOENV_TAU2_VALIDATION_MODE": "1"} if validation_mode else None
+        return Tau2WorkerClient(
+            self.worker_command(checkout), timeout_seconds=timeout_seconds,
+            environment=environment,
+        )
 
     @staticmethod
     def _paths(checkout: Path) -> dict[str, Path]:

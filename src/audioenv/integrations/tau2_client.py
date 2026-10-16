@@ -127,6 +127,10 @@ class Tau2WorkerClient:
     def discover(self) -> dict[str, Any]:
         return self.request("discover")
 
+    def validate_reference(self, task_id: str) -> dict[str, Any]:
+        """Run protected upstream reference validation in an explicitly gated worker."""
+        return self.request("validate_reference", task_id=task_id)
+
     def reset(self, task_id: str) -> dict[str, Any]:
         return self.request("reset", task_id=task_id)
 

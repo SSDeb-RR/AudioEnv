@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Any
 from uuid import uuid4
@@ -34,6 +35,29 @@ class RetailWorker:
                 for task_id in self.splits.get(name, ())
             }
             return {"tasks": [{"id": task.id, "split": split_by_id.get(task.id, "unknown")} for task in self.tasks.values()]}
+        if operation == "validate_reference":
+            if os.environ.get("AUDIOENV_TAU2_VALIDATION_MODE") != "1":
+                raise PermissionError("protected reference validation is disabled in rollout workers")
+            task_id = str(request["task_id"])
+            reset = self.handle({"operation": "reset", "task_id": task_id})
+            session_id = reset["session_id"]
+            try:
+                task = self.sessions[session_id]["task"]
+                criteria = task.evaluation_criteria
+                for action in criteria.actions or [] if criteria else []:
+                    self.handle({
+                        "operation": "tool", "session_id": session_id,
+                        "name": action.name, "arguments": action.arguments,
+                    })
+                self.handle({
+                    "operation": "speak", "session_id": session_id,
+                    "role": "assistant", "semantic_text": "Reference trajectory completed.",
+                    "end_episode": True,
+                })
+                result = self.handle({"operation": "verify", "session_id": session_id})
+                return _reference_summary(task_id, result)
+            finally:
+                self.sessions.pop(session_id, None)
         if operation == "reset":
             task = self.tasks[str(request["task_id"])]
             environment = self.get_environment()
@@ -156,6 +180,22 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     return str(value)
+
+
+def _reference_summary(task_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Return parity evidence without protected actions, assertions, or dialogue."""
+    reward_info = dict(result["reward_info"])
+    return {
+        "task_id": task_id,
+        "upstream_reward": result["upstream_reward"],
+        "upstream_environment_reward": result["upstream_environment_reward"],
+        "db_match": result["db_match"],
+        "user_db_match": result["user_db_match"],
+        "reward_info": {
+            key: reward_info.get(key)
+            for key in ("reward", "reward_basis", "reward_breakdown", "db_check")
+        },
+    }
 
 
 def main() -> int:
