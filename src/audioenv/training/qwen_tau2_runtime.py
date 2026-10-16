@@ -84,7 +84,11 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         if not output.extra_fields.get("audioenv_native_audio_bound") or native is None:
             raise RuntimeError("Qwen rollout did not return same-request Talker audio")
         wav = _waveform_bytes(native, int(output.extra_fields.get("audioenv_native_audio_sample_rate", 24_000)))
-        if parse_episode_action(semantic).kind == "speak":
+        try:
+            parsed_action = parse_episode_action(semantic)
+        except ValueError:
+            parsed_action = None
+        if parsed_action is None or parsed_action.kind == "speak":
             agent_path = _write_audio(audio_dir, wav, "agent")
             audio_artifacts.append({"path": str(agent_path), "producer": "agent"})
         prompt_rows.append((tuple(prompt_ids), tuple(output.token_ids), tuple(float(v) for v in output.log_probs)))
@@ -100,7 +104,7 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
     prompt_ids, response_ids, response_mask, logprobs = _flatten_policy_rows(prompt_rows)
     trusted = {
         "terminal": result.terminal_reward,
-        "process": 0.0,
+        "process": result.process_reward,
         "reward_version": str(sample.get("reward_version", "tau2-official-v1")),
         "verifier_hash": verifier_hash,
     }
@@ -116,7 +120,7 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         "reward_version": trusted["reward_version"],
         "audio_profile_id": str(sample.get("audio_profile_id", "native-clean")),
         "terminal_reward": result.terminal_reward,
-        "process_reward": 0.0,
+        "process_reward": result.process_reward,
         "audio_paths": audio_paths,
         "audio_artifacts": audio_artifacts,
         "actions": [asdict(step.action) for step in result.steps],

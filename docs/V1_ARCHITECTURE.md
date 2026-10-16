@@ -156,6 +156,13 @@ Trainer descriptors also carry a release tier. GSPO is the Qwen vertical
 slice's `release_candidate`; GRPO remains `experimental` until a separate
 CUDA acceptance run verifies its optimizer path.
 
+The tau2 episode controller treats malformed action envelopes and tool-worker
+rejections as explicit recoverable actions. It gives the policy a stable public
+error observation, records the action, assigns a deterministic `-0.1` process
+penalty (`-0.2` for an identical repeated failure), and continues until normal
+termination or the episode limit. Worker exception details never enter model
+context. Terminal reward remains owned by the protected upstream verifier.
+
 Image construction and worker startup both execute an upstream-contract audit.
 The audit imports the pinned VeRL packages, confirms AudioEnv's agent-loop
 registration and exact multimodal output surface, resolves the protected

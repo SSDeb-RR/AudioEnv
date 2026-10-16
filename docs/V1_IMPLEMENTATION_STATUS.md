@@ -178,6 +178,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   maturity instead of presenting both algorithms equally: GSPO is the
   `release_candidate`; GRPO is `experimental` until independently accepted on
   real CUDA hardware.
+- Malformed structured actions and rejected tau2 tool calls no longer abort a
+  costly rollout. They become traceable recovery observations with deterministic
+  process penalties, including a stronger penalty for identical repeated
+  failures; protected terminal verification is unchanged and private worker
+  errors are not exposed to the policy.
 - The VeRL agent loop no longer supplies a precomputed reward score, which
   would cause upstream batching to bypass the configured scorer. Protected
   terminal/process results and the immutable verifier hash now flow through

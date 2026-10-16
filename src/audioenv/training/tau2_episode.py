@@ -66,6 +66,7 @@ class Tau2EpisodeResult:
     steps: tuple[EpisodeStep, ...]
     verification: dict[str, Any]
     terminal_reward: float
+    process_reward: float
     truncated: bool
     truncation_reason: str | None
 
@@ -104,21 +105,40 @@ class Tau2NativeEpisodeController:
         tool_result = None
         terminated = False
         reason = None
+        process_reward = 0.0
+        failed_actions: set[str] = set()
         try:
             for index in range(1, self.max_turns + 1):
                 produced = generate(PolicyObservation(caller_audio, tool_result, index, tool_schemas))
                 turn = await produced if hasattr(produced, "__await__") else produced
                 if not isinstance(turn, PolicyTurn):
                     raise TypeError("policy generator must return PolicyTurn")
-                action = parse_episode_action(turn.semantic_text)
-                if action.kind == "tool":
-                    raw_tool_result = await asyncio.to_thread(
-                        self.tau2.tool,
-                        tau2_session, action.tool_name or "", action.tool_arguments or {},
+                try:
+                    action = parse_episode_action(turn.semantic_text)
+                except ValueError:
+                    action = EpisodeAction(kind="invalid", semantic_text=turn.semantic_text)
+                    tool_result = {"result": {"error": "invalid_action"}}
+                    process_reward += _failure_penalty(
+                        "invalid:" + turn.semantic_text, failed_actions,
                     )
-                    # Worker diagnostics such as the database hash are useful
-                    # for traces but are not a tool observation for the model.
-                    tool_result = _public_tool_result(raw_tool_result)
+                if action.kind == "tool":
+                    try:
+                        raw_tool_result = await asyncio.to_thread(
+                            self.tau2.tool,
+                            tau2_session, action.tool_name or "", action.tool_arguments or {},
+                        )
+                        # Worker diagnostics such as the database hash are useful
+                        # for traces but are not a tool observation for the model.
+                        tool_result = _public_tool_result(raw_tool_result)
+                    except Exception:
+                        # Do not terminate an expensive rollout or expose worker
+                        # internals. The policy receives one stable recovery signal.
+                        tool_result = {"result": {"error": "tool_execution_failed"}}
+                        signature = json.dumps(
+                            {"name": action.tool_name, "arguments": action.tool_arguments},
+                            sort_keys=True, separators=(",", ":"),
+                        )
+                        process_reward += _failure_penalty("tool:" + signature, failed_actions)
                 elif action.kind == "speak":
                     if not turn.audio:
                         raise ValueError("spoken policy action requires bound native audio")
@@ -135,7 +155,7 @@ class Tau2NativeEpisodeController:
                         caller_text = str(response.get("semantic_text") or "").strip()
                         if caller_text:
                             await asyncio.to_thread(self.tau2.speak, tau2_session, "user", caller_text)
-                else:
+                elif action.kind != "invalid":
                     raise AssertionError("unreachable action kind")
                 steps.append(EpisodeStep(index, action, turn.metadata, tool_result))
                 if terminated:
@@ -148,6 +168,7 @@ class Tau2NativeEpisodeController:
         return Tau2EpisodeResult(
             task_id=task_id, steps=tuple(steps), verification=verification,
             terminal_reward=float(verification.get("upstream_reward", 0.0)),
+            process_reward=process_reward,
             truncated=not terminated, truncation_reason=reason,
         )
 
@@ -205,3 +226,11 @@ def _public_tool_result(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict) or "result" not in payload:
         raise ValueError("tau2 tool response is missing its public result")
     return {"result": payload["result"]}
+
+
+def _failure_penalty(signature: str, previous: set[str]) -> float:
+    """Penalize a failed action and penalize an identical retry once more."""
+
+    repeated = signature in previous
+    previous.add(signature)
+    return -0.2 if repeated else -0.1

@@ -50,6 +50,7 @@ def test_tau2_episode_keeps_private_goal_out_of_policy_and_uses_official_reward(
 
     result = asyncio.run(Tau2NativeEpisodeController(tau2, caller).run("0", 7, generate))
     assert result.terminal_reward == 1 and not result.truncated
+    assert result.process_reward == 0
     assert [step.action.kind for step in result.steps] == ["tool", "speak", "speak"]
     assert observations[0].caller_audio == b"opening wav"
     assert observations[0].tool_result is None
@@ -78,3 +79,46 @@ def test_action_parser_rejects_ambiguous_or_malformed_envelopes():
         parse_episode_action("{broken")
     with pytest.raises(ValueError, match="unsupported"):
         parse_episode_action('{"tool_call":{"name":"x","arguments":{}},"speak":"also"}')
+
+
+def test_tau2_episode_recovers_from_malformed_action_with_repeat_penalty():
+    tau2, caller = _Tau2(), _Caller()
+    outputs = iter((
+        PolicyTurn("{broken", b"bad wav", None),
+        PolicyTurn("{broken", b"bad wav", None),
+        PolicyTurn('{"speak":"Recovered.","terminate":true}', b"final wav", None),
+    ))
+    observations = []
+
+    def generate(observation):
+        observations.append(observation)
+        return next(outputs)
+
+    result = asyncio.run(Tau2NativeEpisodeController(tau2, caller).run("0", 7, generate))
+    assert [step.action.kind for step in result.steps] == ["invalid", "invalid", "speak"]
+    assert observations[1].tool_result == {"result": {"error": "invalid_action"}}
+    assert observations[2].tool_result == {"result": {"error": "invalid_action"}}
+    assert result.process_reward == pytest.approx(-0.3)
+    assert result.terminal_reward == 1
+
+
+def test_tau2_episode_turns_tool_worker_failure_into_recovery_observation():
+    class RejectingTau2(_Tau2):
+        def tool(self, session_id, name, arguments):
+            raise RuntimeError("private worker detail")
+
+    tau2, caller = RejectingTau2(), _Caller()
+    outputs = iter((
+        PolicyTurn('{"tool_call":{"name":"unknown","arguments":{}}}', b"ignored", None),
+        PolicyTurn('{"speak":"I could not complete that.","terminate":true}', b"final wav", None),
+    ))
+    observations = []
+
+    def generate(observation):
+        observations.append(observation)
+        return next(outputs)
+
+    result = asyncio.run(Tau2NativeEpisodeController(tau2, caller).run("0", 7, generate))
+    assert observations[1].tool_result == {"result": {"error": "tool_execution_failed"}}
+    assert "private worker detail" not in repr(observations)
+    assert result.process_reward == pytest.approx(-0.1)

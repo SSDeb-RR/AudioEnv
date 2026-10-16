@@ -78,6 +78,10 @@ full-duplex streaming, or closed-model RL.
   VeRL-Omni v0.2 GSPO and GRPO Thinker-LoRA plugins. GSPO is the release
   candidate; GRPO remains explicitly experimental until its own GPU acceptance
   run. Both paths are code-ready but GPU-unverified.
+- The protected tau2 episode controller converts malformed structured outputs
+  and rejected tool calls into stable recovery observations and deterministic
+  process penalties. Repeating the same failed action receives an additional
+  penalty instead of crashing or silently discarding the rollout.
 - A provider-neutral `audioenv-gpu-worker` bundle/event/artifact contract used
   by the verified local training backend and the CUDA-gated Qwen backend.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
