@@ -1,10 +1,12 @@
 from datetime import timedelta
 import json
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from audioenv.platform.api import create_app
+from audioenv.platform.api import _remote_resume_checkpoint, create_app
 from audioenv.platform.db import (
     Database,
     InvalidTransition,
@@ -26,6 +28,29 @@ def test_experiment_lifecycle_and_invalid_transition(tmp_path):
     for target in ("validating", "queued", "running", "evaluating", "completed"):
         experiment = repository.transition(experiment.id, target)
     assert experiment.status == "completed"
+
+
+def test_gpu_resume_lineage_requires_preserved_checkpoint_directory(tmp_path):
+    database = Database(f"sqlite:///{tmp_path / 'resume.sqlite'}")
+    database.create_schema()
+    repository = PlatformRepository(database)
+    experiment = repository.create_experiment("gpu", {"provider_id": "local-cuda"})
+    artifact = SimpleNamespace(metadata_json=json.dumps({
+        "remote_relative_path": "validation/global_step_7/adapter/model.safetensors",
+    }))
+    assert _remote_resume_checkpoint(
+        repository, experiment.id, "local-cuda", artifact,
+    ) == f"/workspace/runs/{experiment.id}/output/validation/global_step_7"
+
+    with pytest.raises(HTTPException, match="persistent network volume"):
+        _remote_resume_checkpoint(repository, experiment.id, "runpod-secure-cloud", artifact)
+    repository.create_compute_resource(
+        experiment_id=experiment.id, provider="runpod-secure-cloud", status="stopped",
+        config={"config": {"network_volume_id": "volume-1"}},
+    )
+    assert _remote_resume_checkpoint(
+        repository, experiment.id, "runpod-secure-cloud", artifact,
+    ).endswith("/validation/global_step_7")
 
 
 def test_api_uses_persisted_records(tmp_path):

@@ -128,6 +128,27 @@ def test_api_launch_train_reload_compare_and_serve_spa(tmp_path):
     checkpoint = next(a for a in artifacts if a["kind"] == "checkpoint")
     verified = client.post(f"/api/experiments/{experiment['id']}/checkpoints/{checkpoint['id']}/verify", json={}).json()
     assert verified["verified"]
+    resumed = client.post(f"/api/experiments/{experiment['id']}/resume", json={
+        "checkpoint_artifact_id": checkpoint["id"],
+        "run_name": "Acceptance run resumed", "additional_steps": 2,
+    })
+    assert resumed.status_code == 201
+    resumed_run = resumed.json()
+    assert resumed_run["config"]["resume_parent_experiment_id"] == experiment["id"]
+    assert resumed_run["config"]["resume_checkpoint_artifact_id"] == checkpoint["id"]
+    assert resumed_run["config"]["hyperparameters"]["steps"] == 2
+    assert client.post(f"/api/experiments/{resumed_run['id']}/preflight", json={}).json()["available"]
+    assert client.post(
+        f"/api/experiments/{resumed_run['id']}/launch",
+        json={"confirmed": True, "provider": "local-subprocess"},
+    ).status_code == 202
+    for _ in range(100):
+        resumed_current = client.get(f"/api/experiments/{resumed_run['id']}").json()
+        if resumed_current["status"] in {"completed", "failed", "cancelled"}: break
+        time.sleep(0.05)
+    assert resumed_current["status"] == "completed", resumed_current
+    resumed_metrics = client.get(f"/api/experiments/{resumed_run['id']}/metrics").json()
+    assert max(item["step"] for item in resumed_metrics) == 22
     evaluations = [e for e in client.get("/api/evaluations").json() if e["experiment_id"] == experiment["id"]]
     assert len(evaluations) == 2
     comparison = client.get(f"/api/comparisons?experiment_id={experiment['id']}").json()[0]["result"]

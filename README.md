@@ -87,6 +87,11 @@ full-duplex streaming, or closed-model RL.
 - GPU worker preflight binds every configured trainer and frozen-caller CUDA
   ordinal to the attested NVIDIA inventory and rejects missing or sub-80-GB
   devices before either checkpoint starts loading.
+- Terminal local runs can resume from a content-hash-verified checkpoint in the
+  dashboard. Resume creates a new immutable child experiment with explicit
+  parent/checkpoint lineage before preflight and explicit relaunch. GPU resume
+  drafts resolve only preserved managed checkpoint directories; RunPod also
+  requires its original persistent network volume.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
   while building or attesting the GPU worker runtime.

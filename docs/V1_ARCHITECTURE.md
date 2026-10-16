@@ -221,6 +221,14 @@ The local provider uses subprocess workers and persisted heartbeats. An
 interrupted non-resumable job becomes failed; a resumable trainer may enqueue a
 new attempt pointing to a checkpoint.
 
+Resume never mutates a terminal experiment. The API verifies the checkpoint
+content hash and creates a new draft whose immutable configuration records its
+parent experiment and checkpoint artifact. Local PyTorch runs restore model and
+optimizer state. GPU drafts bind `resume_from` to the preserved managed
+`global_step_*` directory; RunPod resume is rejected unless the original
+persistent network volume is recorded. Every child repeats preflight and
+explicit launch confirmation.
+
 The production entrypoint is `audioenv app --data-dir .audioenv`. It applies
 packaged Alembic migrations, recovers expired worker leases, and serves the
 compiled SPA and API from one loopback process. Local training still runs in a

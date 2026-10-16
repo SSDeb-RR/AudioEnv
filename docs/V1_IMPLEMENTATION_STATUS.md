@@ -187,6 +187,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   attested physical inventory and rejects missing or sub-80-GB devices before
   model loading, closing a case where a four-GPU host could pass VeRL preflight
   but fail when the separately allocated caller started.
+- Checkpoint resume is now a product workflow rather than a hidden trainer
+  option. The API creates an immutable lineage-bound child run after verifying
+  the checkpoint artifact hash; the dashboard resumes a local run, preflights
+  it, explicitly launches it, and shows continued step numbering. GPU resume
+  drafts resolve preserved `global_step_*` directories and RunPod fails closed
+  without its original persistent volume.
+- The GPU run wizard now emits VeRL's actual `max_steps` setting. The previous
+  generic `steps` field could be ignored and silently fall back to one step.
 - The VeRL agent loop no longer supplies a precomputed reward score, which
   would cause upstream batching to bypass the configured scorer. Protected
   terminal/process results and the immutable verifier hash now flow through
@@ -315,7 +323,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-156 passed
+161 passed
 
 uv run audioenv validate
 389 passed, 0 failed

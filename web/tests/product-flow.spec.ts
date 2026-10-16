@@ -25,6 +25,9 @@ test("create project, train, reload, compare, and export", async ({ page }) => {
   await expect(page.getByText(/no reward event|milestone|terminal/).first()).toBeVisible();
   await page.getByRole("button", { name: "Reload verify" }).click();
   await expect(page.getByText(/Reload verified at step 20/)).toBeVisible();
+  await page.getByRole("button", { name: "Resume 10 more steps" }).click();
+  await expect(page.getByText(/Status: completed/), "resumed worker should finish").toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("30", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "Export reproducibility bundle" }).click();
   await expect(page.getByRole("link", { name: "Download experiment export" })).toBeVisible();
 
@@ -70,6 +73,10 @@ test("configure the guarded RunPod quote workflow without provisioning", async (
   await page.getByLabel("Image digest").fill(`sha256:${"a".repeat(64)}`);
   await page.getByRole("button", { name: "Run preflight" }).click();
   await expect(page.getByText("Preflight passed")).toBeVisible();
+  const experiments = await request.get("/api/experiments");
+  const gpuRun = (await experiments.json()).find((item:any) => item.name === "Playwright guarded GPU run");
+  expect(gpuRun.config.hyperparameters.max_steps).toBe(40);
+  expect(gpuRun.config.hyperparameters.steps).toBeUndefined();
   await expect(page.getByRole("button", { name: "Request RunPod compute estimate" })).toBeEnabled();
   await expect(page.getByText(/provider preflight required/i)).toBeVisible();
 });

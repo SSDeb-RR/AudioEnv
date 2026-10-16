@@ -53,6 +53,12 @@ class ExperimentCreate(StrictRequest):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExperimentResume(StrictRequest):
+    checkpoint_artifact_id: str = Field(min_length=64, max_length=64)
+    run_name: str = Field(min_length=1, max_length=200)
+    additional_steps: int = Field(default=10, ge=1)
+
+
 class TransitionRequest(StrictRequest):
     target: str
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -856,6 +862,52 @@ def create_app(
         return serialize_experiment(repository.create_experiment(
             request.name, request.config, project_id=request.project_id,
         ))
+
+    @app.post("/api/experiments/{experiment_id}/resume", status_code=201)
+    def resume_experiment(experiment_id: str, request: ExperimentResume) -> dict[str, Any]:
+        source = repository.get_experiment(experiment_id)
+        if source is None:
+            raise HTTPException(404, "experiment not found")
+        if source.status not in {"completed", "failed", "cancelled"}:
+            raise HTTPException(409, "only a terminal experiment can be resumed")
+        artifact = repository.get_artifact(request.checkpoint_artifact_id)
+        if artifact is None or artifact.experiment_id != experiment_id or artifact.kind != "checkpoint":
+            raise HTTPException(404, "checkpoint not found")
+        checkpoint = Path(artifact.path).resolve()
+        if not checkpoint.is_file() or app.state.data_root not in checkpoint.parents:
+            raise HTTPException(409, "checkpoint artifact is unavailable")
+        if sha256(checkpoint.read_bytes()).hexdigest() != artifact.id:
+            raise HTTPException(409, "checkpoint artifact failed content-hash verification")
+
+        config = json.loads(source.config_json)
+        provider_id = str(config.get("provider_id", "local-subprocess"))
+        hyperparameters = dict(config.get("hyperparameters") or config.get("trainer_config") or {})
+        if provider_id == "local-subprocess":
+            hyperparameters.update({"steps": request.additional_steps, "resume_from": str(checkpoint)})
+        else:
+            gpu = dict(config.get("gpu_worker") or {})
+            gpu["resume_from"] = _remote_resume_checkpoint(
+                repository, source.id, provider_id, artifact,
+            )
+            config["gpu_worker"] = gpu
+            hyperparameters["max_steps"] = request.additional_steps
+            hyperparameters.pop("steps", None)
+        config.update({
+            "hyperparameters": hyperparameters,
+            "resume_parent_experiment_id": source.id,
+            "resume_checkpoint_artifact_id": artifact.id,
+        })
+        child = repository.create_experiment(request.run_name, config, project_id=source.project_id)
+        lineage = {
+            "parent_experiment_id": source.id,
+            "checkpoint_artifact_id": artifact.id,
+            "additional_steps": request.additional_steps,
+        }
+        repository.add_log(child.id, "Resume draft created from immutable checkpoint", payload=lineage)
+        repository.add_log(source.id, "Child resume draft created", payload={
+            **lineage, "child_experiment_id": child.id,
+        })
+        return serialize_experiment(child)
 
     @app.get("/api/experiments")
     def list_experiments() -> list[dict[str, Any]]:
@@ -1857,6 +1909,35 @@ def _gpu_artifact_kind(path: Path) -> str:
     if "trajectories" in path.parts and path.name.startswith("trajectory-") and path.suffix == ".jsonl":
         return "training_trajectories"
     return "gpu_run_artifact"
+
+
+def _remote_resume_checkpoint(
+    repository: PlatformRepository, experiment_id: str, provider_id: str, artifact,
+) -> str:
+    """Resolve a preserved checkpoint directory without trusting a client path."""
+
+    if provider_id not in {"local-cuda", "runpod-secure-cloud", "modal-sandbox"}:
+        raise HTTPException(422, "trainer/provider does not support checkpoint resume")
+    metadata = json.loads(artifact.metadata_json)
+    relative = Path(str(metadata.get("remote_relative_path", "")))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise HTTPException(409, "checkpoint lineage contains an unsafe remote path")
+    checkpoint_index = next(
+        (index for index, part in enumerate(relative.parts) if part.startswith("global_step_")),
+        None,
+    )
+    if checkpoint_index is None:
+        raise HTTPException(409, "GPU checkpoint artifact lacks resumable directory lineage")
+    if provider_id == "runpod-secure-cloud":
+        persistent = any(
+            resource.provider == provider_id
+            and bool(json.loads(resource.config_json).get("config", {}).get("network_volume_id"))
+            for resource in repository.list_compute_resources(experiment_id)
+        )
+        if not persistent:
+            raise HTTPException(409, "RunPod resume requires the original persistent network volume")
+    directory = Path(*relative.parts[: checkpoint_index + 1]).as_posix()
+    return f"/workspace/runs/{experiment_id}/output/{directory}"
 
 
 def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirmation_name):
