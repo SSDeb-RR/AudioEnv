@@ -75,6 +75,7 @@ class LaunchRequest(StrictRequest):
     provider: str = "local-subprocess"
     confirmation_name: str | None = None
     quote_id: str | None = None
+    compute_resource_id: str | None = None
 
 
 class RunPodQuoteRequest(StrictRequest):
@@ -100,6 +101,12 @@ class ModalQuoteRequest(StrictRequest):
     volume_name: str = Field(default="audioenv-runs", min_length=1, max_length=200)
     secret_names: tuple[str, ...] = ()
     hourly_price_per_gpu_usd: float = Field(gt=0)
+
+
+class LocalCUDAPrepareRequest(StrictRequest):
+    plan: GPUExecutionPlanV1
+    data_dir: str = Field(min_length=1, max_length=4_096)
+    model_path: str = Field(min_length=1, max_length=4_096)
 
 
 class ModelProbeRequest(StrictRequest):
@@ -143,6 +150,7 @@ def create_app(
     runpod_transport: Any | None = None,
     runpod_executor_factory: Callable[[dict[str, Any], Any], Any] | None = None,
     modal_transport: Any | None = None,
+    local_cuda_provider: Any | None = None,
 ) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
@@ -169,6 +177,7 @@ def create_app(
     app.state.runpod_transport = runpod_transport
     app.state.runpod_executor_factory = runpod_executor_factory
     app.state.modal_transport = modal_transport
+    app.state.local_cuda_provider = local_cuda_provider
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -214,8 +223,9 @@ def create_app(
         for item in app.state.harness_registry.list("provider"):
             row = item.model_dump(mode="json")
             row.update({
-                "supports_quote": True,
+                "supports_quote": item.id in {"runpod-secure-cloud", "modal-sandbox"},
                 "requires_quote": item.id in {"runpod-secure-cloud", "modal-sandbox"},
+                "requires_machine_preflight": item.id == "local-cuda",
                 "estimated_cost_usd": 0.0 if item.id == "local-subprocess" else None,
             })
             rows.append(row)
@@ -595,7 +605,7 @@ def create_app(
             raise HTTPException(409, str(exc)) from exc
         active = [
             item for item in repository.list_compute_resources(experiment_id)
-            if item.provider in {"runpod-secure-cloud", "modal-sandbox"}
+            if item.provider in {"runpod-secure-cloud", "modal-sandbox", "local-cuda"}
             and item.external_id and item.status in {"provisioning", "running", "cancelling"}
         ]
         if active:
@@ -613,8 +623,12 @@ def create_app(
                         if executor is not None and "worker_launch" in snapshot:
                             provider.request_cancellation(executor, experiment_id)
                         provider.cancel(resource.external_id or "")
-                    else:
+                    elif resource.provider == "modal-sandbox":
                         _modal_provider(app, json.loads(resource.config_json)).cancel(resource.external_id or "")
+                    else:
+                        provider = _local_cuda_provider(app)
+                        provider.cancel(resource.external_id or "")
+                        provider.cleanup(resource.external_id or "")
                     repository.update_compute_resource(resource.id, status="cancelled")
                 except Exception as exc:
                     repository.update_compute_resource(resource.id, status="cancellation_failed")
@@ -655,6 +669,19 @@ def create_app(
                 else "failed"
             )
             snapshot["last_remote_state"] = remote
+            return _compute_resource(repository.update_compute_resource(
+                resource.id, status=status, config=snapshot,
+            ))
+        if resource.provider == "local-cuda" and resource.external_id:
+            snapshot = json.loads(resource.config_json)
+            try:
+                remote = _local_cuda_provider(app).reconnect(resource.external_id)
+            except Exception as exc:
+                raise HTTPException(502, f"Local CUDA state refresh failed: {exc}") from exc
+            status = "running" if remote.get("running") else (
+                "stopped" if remote.get("exit_code") == 0 else "failed"
+            )
+            snapshot["last_container_state"] = remote
             return _compute_resource(repository.update_compute_resource(
                 resource.id, status=status, config=snapshot,
             ))
@@ -707,6 +734,8 @@ def create_app(
             raise HTTPException(404, "compute resource not found")
         if resource.provider == "modal-sandbox" and resource.external_id:
             return _sync_modal_resource(app, repository, record, resource)
+        if resource.provider == "local-cuda" and resource.external_id:
+            return _sync_local_cuda_resource(app, repository, record, resource)
         if resource.provider != "runpod-secure-cloud" or not resource.external_id:
             raise HTTPException(422, "compute resource cannot be synchronized")
         snapshot = json.loads(resource.config_json)
@@ -833,6 +862,48 @@ def create_app(
         })
         return _compute_resource(resource)
 
+    @app.post("/api/experiments/{experiment_id}/local-cuda/prepare", status_code=201)
+    def local_cuda_prepare(experiment_id: str, request: LocalCUDAPrepareRequest) -> dict[str, Any]:
+        record = repository.get_experiment(experiment_id)
+        if record is None:
+            raise HTTPException(404, "experiment not found")
+        config = json.loads(record.config_json)
+        reasons = _gpu_configuration_reasons(repository, config, "local-cuda")
+        if request.plan.provider != "local-cuda":
+            reasons.append("execution plan must target local-cuda")
+        if reasons:
+            raise HTTPException(422, {"reasons": reasons})
+        provider = _local_cuda_provider(app)
+        data_dir = Path(request.data_dir).resolve()
+        model_path = Path(request.model_path).resolve()
+        try:
+            preflight = provider.preflight(request.plan, model_path=model_path)
+            worker_experiment = _gpu_worker_experiment(record.id, record.name, config)
+            if preflight.available:
+                staged_path = provider.stage(
+                    request.plan, data_dir=data_dir, experiment=worker_experiment,
+                )
+            else:
+                staged_path = None
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(422, f"Local CUDA preparation failed: {exc}") from exc
+        snapshot = {
+            "plan": request.plan.model_dump(mode="json"), "data_dir": str(data_dir),
+            "model_path": str(model_path), "experiment_config_hash": record.config_hash,
+            "worker_experiment": worker_experiment.model_dump(mode="json"),
+            "preflight": {"available": preflight.available, "reasons": list(preflight.reasons),
+                          "telemetry": preflight.telemetry},
+            "experiment_path": str(staged_path) if staged_path else None,
+        }
+        resource = repository.create_compute_resource(
+            experiment_id=experiment_id, provider=provider.provider_id,
+            status="prepared" if preflight.available else "blocked", config=snapshot,
+        )
+        repository.add_log(experiment_id, "Local CUDA preflight persisted", payload={
+            "resource_id": resource.id, **snapshot["preflight"],
+        })
+        return _compute_resource(resource)
+
     @app.post("/api/experiments/{experiment_id}/modal/quote", status_code=201)
     def modal_quote(experiment_id: str, request: ModalQuoteRequest) -> dict[str, Any]:
         record = repository.get_experiment(experiment_id)
@@ -888,6 +959,11 @@ def create_app(
         if request.provider == "modal-sandbox":
             return _launch_modal(
                 app, repository, record, request.quote_id, request.confirmation_name,
+            )
+        if request.provider == "local-cuda":
+            return _launch_local_cuda(
+                app, repository, record, request.compute_resource_id,
+                request.confirmation_name,
             )
         if request.provider != "local-subprocess":
             raise HTTPException(422, "unsupported execution provider")
@@ -1064,10 +1140,18 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
     provider_id = config.get("provider_id", "local-subprocess")
     environment_id = config.get("environment_id")
     agent_id = config.get("agent_model_id", "audioenv/small-audio-tool-policy")
-    if provider_id in {"runpod-secure-cloud", "modal-sandbox"}:
+    if provider_id in {"runpod-secure-cloud", "modal-sandbox", "local-cuda"}:
         reasons = _gpu_configuration_reasons(repository, config, provider_id)
-        label = "Secure Cloud GPU selected by live quote" if provider_id == "runpod-secure-cloud" else "Modal GPU selected by reviewed estimate"
-        basis = "live RunPod quote required before launch" if provider_id == "runpod-secure-cloud" else "operator-configured Modal rate required before launch"
+        label = {
+            "runpod-secure-cloud": "Secure Cloud GPU selected by live quote",
+            "modal-sandbox": "Modal GPU selected by reviewed estimate",
+            "local-cuda": "Local NVIDIA GPU selected by machine preflight",
+        }[provider_id]
+        basis = {
+            "runpod-secure-cloud": "live RunPod quote required before launch",
+            "modal-sandbox": "operator-configured Modal rate required before launch",
+            "local-cuda": "local hardware; machine preflight required before launch",
+        }[provider_id]
         return {
             "available": not reasons, "reasons": reasons, "trainer_id": trainer_id,
             "provider_id": provider_id, "environment_id": environment_id,
@@ -1075,7 +1159,7 @@ def _preflight(repository: PlatformRepository, config: dict[str, Any]) -> dict[s
             "hardware": {"device_type": label, "device_count": 8},
             "cost": {"status": "quote_required", "estimated_usd": None,
                      "basis": basis},
-            "resource_estimate": None, "launch_requires_quote": True,
+            "resource_estimate": None, "launch_requires_quote": provider_id != "local-cuda",
             "gpu_acceptance_status": "not_run",
         }
     if trainer_id not in {"audioenv/small-audio-reinforce", "audioenv/tiny-reinforce"}:
@@ -1317,6 +1401,154 @@ def _modal_provider(app, snapshot: dict[str, Any]):
     return ModalSandboxProvider(ModalSDKTransport(
         hourly_prices={str(config.get("gpu_type", "H100")): hourly},
     ))
+
+
+def _local_cuda_provider(app):
+    if app.state.local_cuda_provider is not None:
+        return app.state.local_cuda_provider
+    from .gpu import LocalCUDAExecutionProvider
+    return LocalCUDAExecutionProvider()
+
+
+def _launch_local_cuda(app, repository: PlatformRepository, record, resource_id, confirmation_name):
+    if confirmation_name != record.name:
+        raise HTTPException(400, "typed confirmation must exactly match the run name")
+    if not resource_id:
+        raise HTTPException(422, "a persisted local CUDA preflight is required")
+    resource = repository.get_compute_resource(resource_id)
+    if (
+        resource is None or resource.experiment_id != record.id
+        or resource.provider != "local-cuda" or resource.status != "prepared"
+    ):
+        raise HTTPException(422, "local CUDA preflight is missing, blocked, stale, or belongs to another experiment")
+    snapshot = json.loads(resource.config_json)
+    if snapshot.get("experiment_config_hash") != record.config_hash:
+        raise HTTPException(409, "experiment configuration changed after local CUDA preflight")
+    plan = GPUExecutionPlanV1.model_validate(snapshot["plan"])
+    provider = _local_cuda_provider(app)
+    container_id: str | None = None
+    try:
+        repository.transition(record.id, "validating")
+        launch = provider.launch(
+            plan, data_dir=Path(snapshot["data_dir"]),
+            experiment_path=Path(snapshot["experiment_path"]), run_name=record.name,
+            confirmation_name=confirmation_name or "",
+        )
+        container_id = str(launch["container_id"])
+        snapshot["worker_launch"] = launch
+        resource = repository.update_compute_resource(
+            resource.id, status="running", external_id=container_id, config=snapshot,
+        )
+        repository.transition(record.id, "queued", {
+            "provider": provider.provider_id, "resource_id": resource.id,
+            "external_id": container_id,
+        })
+    except InvalidTransition as exc:
+        if container_id:
+            try:
+                provider.cancel(container_id)
+                provider.cleanup(container_id)
+            except Exception:
+                pass
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        if container_id:
+            try:
+                provider.cancel(container_id)
+                provider.cleanup(container_id)
+            except Exception:
+                pass
+        try:
+            repository.transition(record.id, "failed", {"reason": f"Local CUDA launch failed: {exc}"})
+        except InvalidTransition:
+            pass
+        repository.update_compute_resource(resource.id, status="failed")
+        raise HTTPException(502, f"Local CUDA launch failed: {exc}") from exc
+    repository.add_log(record.id, "Local CUDA GPU worker launched", payload={
+        "resource_id": resource.id, "container_id": container_id,
+    })
+    return {
+        "resource": _compute_resource(resource), "preflight": snapshot["preflight"],
+        "cost": {"status": "unavailable", "estimated_usd": None,
+                 "basis": "local hardware; electricity excluded"},
+    }
+
+
+def _sync_local_cuda_resource(app, repository: PlatformRepository, record, resource) -> dict[str, Any]:
+    snapshot = json.loads(resource.config_json)
+    provider = _local_cuda_provider(app)
+    try:
+        after = int(snapshot.get("synced_event_sequence", 0))
+        events = provider.stream_events(
+            resource.external_id, experiment_id=record.id, after_sequence=after,
+        )
+        terminal = _persist_gpu_events(repository, record.id, events)
+        if events:
+            snapshot["synced_event_sequence"] = events[-1].sequence
+        artifacts: list[str] = []
+        if terminal and terminal.type == "worker.completed":
+            incoming = app.state.data_root / "incoming" / resource.id
+            for path in provider.collect_artifacts(
+                data_dir=Path(snapshot["data_dir"]), experiment_id=record.id,
+                destination=incoming,
+            ):
+                artifacts.append(_store_gpu_artifact(app, repository, record, path, incoming))
+            _advance_gpu_terminal(repository, record.id, "completed")
+            provider.cancel(resource.external_id)
+            provider.cleanup(resource.external_id)
+            resource = repository.update_compute_resource(resource.id, status="stopped", config=snapshot)
+        elif terminal and terminal.type == "worker.failed":
+            _advance_gpu_terminal(repository, record.id, "failed", terminal.payload)
+            provider.cancel(resource.external_id)
+            provider.cleanup(resource.external_id)
+            resource = repository.update_compute_resource(resource.id, status="failed", config=snapshot)
+        elif terminal and terminal.type == "worker.cancelled":
+            _advance_gpu_terminal(repository, record.id, "cancelled", terminal.payload)
+            provider.cancel(resource.external_id)
+            provider.cleanup(resource.external_id)
+            resource = repository.update_compute_resource(resource.id, status="cancelled", config=snapshot)
+        else:
+            current = repository.get_experiment(record.id)
+            if current and current.status == "queued" and events:
+                repository.transition(record.id, "running", {"resource_id": resource.id})
+            resource = repository.update_compute_resource(resource.id, status="running", config=snapshot)
+    except Exception as exc:
+        raise HTTPException(502, f"Local CUDA synchronization failed: {exc}") from exc
+    return {"resource": _compute_resource(resource), "events_synced": len(events), "artifact_ids": artifacts}
+
+
+def _persist_gpu_events(repository: PlatformRepository, experiment_id: str, events):
+    terminal = None
+    for event in events:
+        if event.type == "metric":
+            repository.add_metric(
+                experiment_id, int(event.payload["step"]), str(event.payload["name"]),
+                float(event.payload["value"]), str(event.payload.get("source", "gpu-worker")),
+            )
+        elif event.type == "log":
+            repository.add_log(experiment_id, str(event.payload.get("message", "")), payload={
+                "gpu_event_sequence": event.sequence, "channel": event.payload.get("channel"),
+            })
+        else:
+            repository.add_log(experiment_id, event.type, payload={
+                "gpu_event_sequence": event.sequence, **event.payload,
+            })
+        if event.type in {"worker.completed", "worker.failed", "worker.cancelled"}:
+            terminal = event
+    return terminal
+
+
+def _store_gpu_artifact(app, repository: PlatformRepository, record, path: Path, incoming: Path) -> str:
+    payload = path.read_bytes()
+    media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
+    stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
+    kind = "checkpoint" if "checkpoint" in path.parts or "adapter" in path.name else "gpu_run_artifact"
+    row = repository.add_artifact(
+        stored.id, experiment_id=record.id, project_id=record.project_id,
+        kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
+        path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
+    )
+    return row.id
 
 
 def _launch_modal(app, repository: PlatformRepository, record, quote_id, confirmation_name):

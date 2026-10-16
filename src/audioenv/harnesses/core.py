@@ -185,6 +185,11 @@ def build_builtin_registry() -> HarnessRegistry:
             status="available", status_reason="verified CPU execution", capabilities=("cpu", "subprocess"),
         ),
         HarnessDescriptor(
+            id="local-cuda", kind="provider", display_name="Local CUDA",
+            status="needs_review", status_reason="guarded Docker lifecycle available; this host has no CUDA runtime",
+            capabilities=("cuda", "distributed", "docker", "local-storage"),
+        ),
+        HarnessDescriptor(
             id="runpod-secure-cloud", kind="provider", display_name="RunPod Secure Cloud",
             status="needs_review", status_reason="quote and guarded launch available; paid GPU acceptance not run",
             capabilities=("cuda", "distributed", "persistent-volume"),

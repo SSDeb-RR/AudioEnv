@@ -68,7 +68,7 @@ test("configure the guarded RunPod quote workflow without provisioning", async (
   await page.getByRole("button", { name: "Run preflight" }).click();
   await expect(page.getByText("Preflight passed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Request RunPod compute estimate" })).toBeEnabled();
-  await expect(page.getByText(/reviewed compute estimate required/i)).toBeVisible();
+  await expect(page.getByText(/provider preflight required/i)).toBeVisible();
 });
 
 test("configure and persist a guarded Modal estimate without provisioning", async ({ page, request }) => {
@@ -93,4 +93,27 @@ test("configure and persist a guarded Modal estimate without provisioning", asyn
   await expect(page.getByText("Compute estimate ready for review")).toBeVisible();
   await expect(page.getByText(/operator-configured rate/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Provision Modal and launch" })).toBeDisabled();
+});
+
+test("configure local CUDA through the machine-preflight boundary", async ({ page, request }) => {
+  const modelId = `playwright-local-cuda-qwen-${Date.now()}`;
+  const registered = await request.post("/api/models", { data: {
+    id: modelId, display_name: "Playwright Local CUDA Qwen", adapter_type: "qwen3-omni",
+    role: "both", config: { checkpoint: "/srv/audioenv/models/qwen" },
+  }});
+  expect(registered.ok()).toBeTruthy();
+
+  await page.goto("/runs");
+  await page.getByRole("button", { name: "New training run" }).click();
+  await page.getByLabel("Provider").selectOption("local-cuda");
+  await page.getByLabel("Agent").selectOption(modelId);
+  await page.getByLabel("Caller").selectOption("audioenv/omni-caller");
+  await page.getByLabel("Trainer").selectOption("qwen3-omni-thinker-gspo-lora");
+  await page.getByLabel("Run name").fill("Playwright local CUDA run");
+  await page.getByLabel("GPU workspace root").fill("/srv/audioenv");
+  await page.getByLabel("Image digest").fill(`sha256:${"c".repeat(64)}`);
+  await page.getByRole("button", { name: "Run preflight" }).click();
+  await expect(page.getByText("Preflight passed")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Inspect local CUDA machine" })).toBeEnabled();
+  await expect(page.getByText(/provider preflight required/i)).toBeVisible();
 });

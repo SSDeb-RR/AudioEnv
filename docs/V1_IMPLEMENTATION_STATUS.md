@@ -22,6 +22,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   envelopes and redacted stdout/stderr as versioned events while preserving
   local logs, detects and content-hashes the resulting VeRL checkpoint, and
   marks reload verification honestly as pending until evaluation runs.
+- Local CUDA now uses that same bundle through a guarded Docker lifecycle:
+  immutable image digest, non-root/read-only/network-off execution, mounted
+  input containment, runtime timeout, typed event replay, reconnect,
+  cancellation, container cleanup, and hash-verified artifact import. Its
+  transport and persisted API lifecycle are executable-test verified; this
+  Mac cannot run the CUDA acceptance path.
 
 - `audioenv app --data-dir .audioenv` applies Alembic migrations, recovers
   abandoned jobs, and serves FastAPI plus the compiled React SPA from one
@@ -227,14 +233,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-124 passed
+127 passed
 
 uv run audioenv validate
 389 passed, 0 failed
 
 cd web && npm run build && npm run test:e2e
 Vite production build passed
-4 Playwright product-flow tests passed
+5 Playwright product-flow tests passed
 
 uv build
 audioenv_foundry-0.5.0 wheel and sdist built

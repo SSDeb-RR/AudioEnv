@@ -11,6 +11,17 @@ staged by local CUDA, RunPod, Modal, or a later customer-cluster provider.
 Providers may allocate machines and transport files, but they must not rewrite
 trainer configuration.
 
+For local CUDA, AudioEnv persists a machine preflight before launch and then
+runs the digest-qualified worker image with Docker as the invoking non-root UID, a read-only
+root filesystem, no network, dropped capabilities, bounded PIDs, an ephemeral
+`/tmp`, and only the selected AudioEnv data directory mounted at `/workspace`.
+All model, dataset, and manifest paths must be contained by that mount (pinned
+source checkouts may come from `/opt/audioenv/checkouts` in the image). Launch
+still requires typing the exact run name. The control plane replays worker
+events, imports only manifest-listed hash-matching artifacts, stops and removes
+the container on terminal states, and records local cost as unavailable rather
+than inventing a cloud price.
+
 The worker writes `events.jsonl` and mirrors every line to stdout. Each line is
 a `GPUWorkerEventV1` with a monotonically increasing sequence number. Event
 types cover start, preflight, training, metrics, checkpoints, evaluation,
