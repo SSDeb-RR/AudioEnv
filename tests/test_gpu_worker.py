@@ -16,6 +16,15 @@ from audioenv.platform.gpu_runtime import attest_qwen_runtime
 from audioenv.training.tau2_dataset import build_tau2_rollout_dataset
 
 
+def test_gpu_image_keeps_ssh_pod_idle_and_contains_attested_source_checkouts():
+    dockerfile = (Path(__file__).parents[1] / "docker/gpu-worker/Dockerfile").read_text()
+    assert 'CMD ["sleep", "infinity"]' in dockerfile
+    assert "ENTRYPOINT" not in dockerfile
+    assert "/opt/audioenv/checkouts/verl-omni" in dockerfile
+    assert "/opt/audioenv/checkouts/tau2" in dockerfile
+    assert '"tau2 @ git+https://github.com/sierra-research/tau2-bench.git@${TAU2_COMMIT}"' in dockerfile
+
+
 def test_worker_bundle_rejects_incompatible_backend():
     with pytest.raises(ValueError, match="local REINFORCE"):
         GPUWorkerExperimentV1(

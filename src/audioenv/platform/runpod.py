@@ -419,7 +419,10 @@ def _managed_remote_path(value: str) -> str:
 def _is_remote_resource(value: str) -> bool:
     path = Path(value)
     return (
-        (value.startswith("/workspace/") or value.startswith("/runpod-volume/"))
+        (
+            value.startswith("/workspace/") or value.startswith("/runpod-volume/")
+            or value.startswith("/opt/audioenv/checkouts/")
+        )
         and ".." not in path.parts
         and bool(re.fullmatch(r"/[A-Za-z0-9._/-]+", value))
     )

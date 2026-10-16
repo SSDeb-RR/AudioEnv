@@ -63,8 +63,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   event contracts. It implements quote hashing, exact-name confirmation,
   gVisor runtime selection, named-secret references, volume staging,
   contiguous event replay, budget/runtime stops, cancellation, reconnect, and
-  hash-verified artifact recovery behind an injected transport. Its live SDK
-  transport and paid acceptance remain intentionally blocked.
+  hash-verified artifact recovery behind an injected transport. A lazy official
+  Python SDK transport now maps named Apps, registry images, Volumes, Secrets,
+  GPU gVisor Sandboxes, stdout events, reconnect, termination, and file
+  recovery without importing Modal or making calls at startup. The installed
+  `modal==1.6.2` signatures were checked locally and the mapping is fake-SDK
+  tested; credentials and paid Sandbox acceptance were not used.
 - The Harness Foundry accepts a local path or HTTPS GitHub repository, safely
   inventories it, compiles validated `audioenv-task.json` inputs, recognizes
   AudioEnv benchmark manifests, and emits a protected OCI scaffold for coding
@@ -194,8 +198,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   reconnectable event replay, safe-boundary cancellation, and hash-verified
   artifact collection. These paths are locally transport-tested; the live API,
   Pod SSH endpoint, container image, and paid execution are not verified.
-- Modal has a fully tested control-plane contract but not a concrete live SDK
-  transport or external Sandbox acceptance run.
+- Modal has a concrete optional SDK transport and tested provider lifecycle,
+  but is not yet wired through the persisted dashboard workflow and has not
+  run an external paid Sandbox acceptance job.
 
 ## Blocked
 
@@ -218,7 +223,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-121 passed
+123 passed
 
 uv run audioenv validate
 389 passed, 0 failed

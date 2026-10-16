@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from io import BytesIO
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -26,6 +27,94 @@ class ModalTransport(Protocol):
     def terminate_sandbox(self, sandbox_id: str) -> dict[str, Any]: ...
     def stream_stdout(self, sandbox_id: str, after_sequence: int) -> Iterable[str]: ...
     def get_volume_file(self, volume_name: str, remote_path: str) -> bytes: ...
+
+
+class ModalSDKTransport:
+    """Lazy adapter for Modal's official Python SDK.
+
+    Importing AudioEnv never imports Modal. Constructing this transport is also
+    side-effect free; network calls occur only in the explicit quote/stage/
+    provision/reconnect methods invoked by the product workflow.
+    """
+
+    def __init__(
+        self, *, app_name: str = "audioenv-gpu", hourly_prices: dict[str, float] | None = None,
+        modal_module: Any | None = None,
+    ):
+        self.app_name = app_name
+        self.hourly_prices = dict(hourly_prices or {})
+        self._module = modal_module
+
+    @property
+    def modal(self):
+        if self._module is None:
+            try:
+                import modal  # type: ignore[import-not-found]
+            except ImportError as exc:
+                raise RuntimeError("install AudioEnv with the 'modal' extra") from exc
+            self._module = modal
+        return self._module
+
+    def gpu_price(self, gpu_type: str, gpu_count: int) -> dict[str, Any]:
+        per_gpu = self.hourly_prices.get(gpu_type)
+        return {
+            "available": per_gpu is not None and per_gpu > 0,
+            "hourly_price_usd": 0.0 if per_gpu is None else per_gpu * gpu_count,
+            "basis": "operator-configured Modal rate; refreshed before launch",
+        }
+
+    def _volume(self, name: str):
+        return self.modal.Volume.from_name(name, create_if_missing=True)
+
+    def put_volume_file(self, volume_name: str, remote_path: str, payload: bytes) -> None:
+        path = _volume_path(remote_path)
+        with self._volume(volume_name).batch_upload(force=True) as batch:
+            batch.put_file(BytesIO(payload), path)
+
+    def get_volume_file(self, volume_name: str, remote_path: str) -> bytes:
+        return b"".join(self._volume(volume_name).read_file(_volume_path(remote_path)))
+
+    def create_sandbox(self, payload: dict[str, Any]) -> dict[str, Any]:
+        modal = self.modal
+        app = modal.App.lookup(self.app_name, create_if_missing=True)
+        image = modal.Image.from_registry(f"{payload['image']}@{payload['image_digest']}")
+        volume = self._volume(payload["volume"]["name"])
+        secrets = [modal.Secret.from_name(name) for name in payload["secret_names"]]
+        gpu = f"{payload['gpu']['type']}:{payload['gpu']['count']}"
+        sandbox = modal.Sandbox.create(
+            *payload["command"], app=app, image=image, gpu=gpu,
+            runtime=payload["runtime"], timeout=payload["timeout_seconds"],
+            volumes={payload["volume"]["mount_path"]: volume}, secrets=secrets,
+        )
+        return {"id": sandbox.object_id, "state": "started"}
+
+    def _sandbox(self, sandbox_id: str):
+        return self.modal.Sandbox.from_id(sandbox_id)
+
+    def get_sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        sandbox = self._sandbox(sandbox_id)
+        result = sandbox.poll()
+        return {
+            "id": sandbox_id, "state": "started" if result is None else "finished",
+            "returncode": getattr(result, "returncode", result),
+        }
+
+    def terminate_sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        self._sandbox(sandbox_id).terminate()
+        return {"id": sandbox_id, "state": "finished"}
+
+    def stream_stdout(self, sandbox_id: str, after_sequence: int) -> Iterable[str]:
+        for line in self._sandbox(sandbox_id).stdout:
+            if isinstance(line, bytes):
+                line = line.decode(errors="replace")
+            if not line.strip():
+                continue
+            try:
+                sequence = int(json.loads(line).get("sequence", 0))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if sequence > after_sequence:
+                yield line
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,10 +176,34 @@ class ModalSandboxProvider:
     def stage(self, config: ModalConfig, experiment: GPUWorkerExperimentV1) -> str:
         if experiment.run_name != config.run_name:
             raise ValueError("experiment run name does not match Modal configuration")
-        remote_path = f"/runs/{experiment.experiment_id}/experiment.json"
+        root = f"/runs/{_safe_id(experiment.experiment_id)}"
+        if experiment.output_dir != f"/workspace{root}/output":
+            raise ValueError("Modal experiment output_dir must target the mounted run volume")
+        if experiment.cancellation_file != f"/workspace{root}/cancel.requested":
+            raise ValueError("Modal experiment cancellation_file must target the mounted run volume")
+        staged_values: dict[str, str] = {}
+        for field in ("environment_manifest", "rollout_dataset_path", "validation_dataset_path"):
+            value = getattr(experiment, field)
+            if value is None or value.startswith("/workspace/"):
+                continue
+            source = Path(value)
+            if not source.is_file():
+                raise ValueError(f"Modal staging input is not a readable file: {field}")
+            suffix = "".join(source.suffixes)[-32:]
+            volume_path = f"{root}/inputs/{field}{suffix}"
+            self.transport.put_volume_file(config.volume_name, volume_path, source.read_bytes())
+            staged_values[field] = f"/workspace{volume_path}"
+        for field in ("model_path", "caller_model_path", "verl_checkout", "tau2_checkout"):
+            value = getattr(experiment, field)
+            if value is not None and not (
+                value.startswith("/workspace/") or value.startswith("/opt/audioenv/checkouts/")
+            ):
+                raise ValueError(f"Modal {field} must already exist on the mounted volume or image")
+        staged_experiment = experiment.model_copy(update=staged_values)
+        remote_path = f"{root}/experiment.json"
         self.transport.put_volume_file(
             config.volume_name, remote_path,
-            (experiment.model_dump_json(indent=2) + "\n").encode(),
+            (staged_experiment.model_dump_json(indent=2) + "\n").encode(),
         )
         return remote_path
 
@@ -174,3 +287,16 @@ class ModalSandboxProvider:
 
     def cancel(self, sandbox_id: str) -> dict[str, Any]:
         return self.transport.terminate_sandbox(sandbox_id)
+
+
+def _safe_id(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) is None:
+        raise ValueError("unsafe Modal experiment id")
+    return value
+
+
+def _volume_path(value: str) -> str:
+    path = PurePosixPath(value)
+    if not value.startswith("/") or ".." in path.parts or re.fullmatch(r"/[A-Za-z0-9._/-]+", value) is None:
+        raise ValueError("unsafe Modal volume path")
+    return value

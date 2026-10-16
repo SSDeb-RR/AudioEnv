@@ -128,5 +128,11 @@ The build wrapper rejects mutable base-image tags before Docker runs. The
 dependency receipt records the AudioEnv, Qwen checkpoint, VeRL-Omni, VeRL,
 vLLM-Omni, tau2, and Repo2RLEnv revisions and is copied into the image at
 `/opt/audioenv/dependencies.lock.json`.
+The build also retains detached, commit-verified VeRL-Omni and tau2 source
+checkouts under `/opt/audioenv/checkouts`; runtime attestation and the launcher
+use those exact paths. Tau2 is installed in the worker rather than merely
+named in the receipt. The image defaults to `sleep infinity` so an SSH-managed
+Pod remains alive; every provider supplies the complete worker command and
+cannot accidentally combine it with a duplicate image entrypoint.
 Building and publishing the release image remains blocked until a CUDA base
 digest is selected and the image passes the GPU acceptance suite.

@@ -34,6 +34,7 @@ qwen = [
 ]
 openenv = ["openenv-core"]
 verifiers = ["verifiers"]
+modal = ["modal>=1.1,<2"]
 envharness = [
   "envharness @ git+https://github.com/google-research/envharness.git@fab7d57441f06b75c73a900e04561d4d7600f361",
 ]
