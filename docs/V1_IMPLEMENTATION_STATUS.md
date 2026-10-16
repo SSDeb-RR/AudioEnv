@@ -318,6 +318,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   live-policy runtime factory, and processor-derived trajectory finalizer are
   implemented and locally contract-tested. The complete loop has not yet run
   inside the pinned CUDA worker.
+- The VeRL manager's postprocessing hook now installs at runtime and converts
+  native rollout drafts into persisted `TrajectoryV2` records using the
+  processor-derived multimodal positions. A regression test verifies the
+  manager method is truly replaced exactly once; previously only the
+  standalone finalizer was tested and unreachable installation statements
+  left the real hook inactive.
 - The immutable GPU image now runs `audioenv-verl-contract-check` after
   installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
   output fields, async postprocessor hook, `audioenv_agent` registration,
@@ -367,7 +373,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-168 passed
+169 passed
 
 uv run audioenv validate
 389 passed, 0 failed

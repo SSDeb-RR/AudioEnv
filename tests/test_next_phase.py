@@ -35,7 +35,11 @@ from audioenv.training.verl_omni import VerlOmniConfig, VerlOmniGRPOTrainer, Ver
 from audioenv.training.verl_plugin import AudioEnvVerlAgentLoop, compute_audioenv_score, trajectory_to_verl_payload
 from audioenv.training.verl_runtime import NativeVerlRollout
 from audioenv.training.qwen_tau2_runtime import _flatten_policy_rows
-from audioenv.training.verl_trajectory_bridge import _persist_trajectory, finalize_native_trajectory
+from audioenv.training.verl_trajectory_bridge import (
+    _persist_trajectory,
+    finalize_native_trajectory,
+    install_trajectory_finalize_bridge,
+)
 
 
 HEX = "a" * 64
@@ -406,6 +410,19 @@ def test_verl_postprocessing_finalizes_real_multichannel_positions(tmp_path: Pat
     assert trace.turns[0].response_mask == (1, 0, 1)
     assert trace.turns[0].multimodal_features[0].start_token == 0
     assert trace.turns[0].multimodal_features[0].end_token == 2
+
+
+def test_verl_trajectory_finalize_bridge_really_installs_once():
+    class Manager:
+        async def _agent_loop_postprocess(self, output, validate, **kwargs):
+            del output, validate, kwargs
+            return object()
+
+    original = Manager._agent_loop_postprocess
+    assert install_trajectory_finalize_bridge(Manager)
+    assert Manager._audioenv_trajectory_bridge is True
+    assert Manager._agent_loop_postprocess is not original
+    assert install_trajectory_finalize_bridge(Manager) is False
 
 
 class _RunPodTransport:

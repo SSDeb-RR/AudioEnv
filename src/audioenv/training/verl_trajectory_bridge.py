@@ -44,6 +44,10 @@ def install_trajectory_finalize_bridge(manager_class=None) -> bool:
             _persist_trajectory(trajectory)
         return internal
 
+    manager_class._agent_loop_postprocess = postprocess
+    manager_class._audioenv_trajectory_bridge = True
+    return True
+
 
 def _persist_trajectory(trajectory: TrajectoryV2) -> Path | None:
     root = os.environ.get("AUDIOENV_TRAJECTORY_DIR")
@@ -56,10 +60,6 @@ def _persist_trajectory(trajectory: TrajectoryV2) -> Path | None:
     with path.open("a", encoding="utf-8") as stream:
         stream.write(line + "\n")
     return path
-
-    manager_class._agent_loop_postprocess = postprocess
-    manager_class._audioenv_trajectory_bridge = True
-    return True
 
 
 def finalize_native_trajectory(

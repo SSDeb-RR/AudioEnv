@@ -106,6 +106,10 @@ full-duplex streaming, or closed-model RL.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
   while building or attesting the GPU worker runtime.
+- The VeRL postprocessor is actually patched to finalize and persist each
+  native rollout with processor-derived multimodal positions; an installation
+  regression test guards this runtime hook rather than testing only the
+  standalone conversion helper.
 - A release-image builder that rejects mutable CUDA bases and wheel/version
   drift, derives upstream build arguments from the checked-in dependency lock,
   labels the image with wheel/lock hashes, and emits a versioned immutable
