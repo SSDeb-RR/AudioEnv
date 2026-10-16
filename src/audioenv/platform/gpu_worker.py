@@ -14,6 +14,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import selectors
 import subprocess
 import sys
 import time
@@ -56,6 +57,9 @@ def load_experiment(path: Path) -> GPUWorkerExperimentV1:
 def run_experiment(experiment: GPUWorkerExperimentV1) -> int:
     output = Path(experiment.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    (output / "experiment.snapshot.json").write_text(
+        experiment.model_dump_json(indent=2), encoding="utf-8",
+    )
     events = EventWriter(experiment.experiment_id, output / "events.jsonl")
     events.emit(
         "worker.started", worker_version="0.6.0-dev", pid=os.getpid(),
@@ -167,22 +171,24 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
             "AUDIOENV_TAU2_CHECKOUT": str(Path(experiment.tau2_checkout or "").resolve()),
             "AUDIOENV_ROLLOUT_AUDIO_DIR": str((output / "rollout-audio").resolve()),
         })
-        with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
-            process = subprocess.Popen(command, cwd=config.checkout, env=train_environment, stdout=stdout, stderr=stderr)
-            while process.poll() is None:
-                if experiment.cancellation_file and Path(experiment.cancellation_file).exists():
-                    process.terminate()
-                    try:
-                        process.wait(timeout=30)
-                    except subprocess.TimeoutExpired:
-                        process.kill(); process.wait()
-                    return 130
-                if caller.poll() is not None:
-                    process.terminate(); process.wait(timeout=30)
-                    raise RuntimeError("frozen caller service exited during training")
-                time.sleep(0.5)
+        process = subprocess.Popen(
+            command, cwd=config.checkout, env=train_environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        cancelled = _relay_trainer_process(
+            process, caller, experiment, events,
+            stdout_path=stdout_path, stderr_path=stderr_path,
+        )
+        if cancelled:
+            return 130
         if process.returncode:
             raise RuntimeError(f"VeRL-Omni exited with status {process.returncode}; inspect trainer logs")
+        checkpoint = _latest_checkpoint(output)
+        if checkpoint is not None:
+            events.emit(
+                "checkpoint.saved", path=str(checkpoint), sha256=_hash_path(checkpoint),
+                reload_verified=False, reason="reload verification requires the evaluation gate",
+            )
         return 0
     finally:
         if caller.poll() is None:
@@ -241,6 +247,122 @@ def _wait_for_caller(process: subprocess.Popen, base_url: str, *, timeout_second
         except Exception:
             time.sleep(0.5)
     raise TimeoutError("frozen caller service did not become ready before the startup deadline")
+
+
+def _relay_trainer_process(
+    process: subprocess.Popen[str], caller: subprocess.Popen[Any],
+    experiment: GPUWorkerExperimentV1, events: EventWriter, *,
+    stdout_path: Path, stderr_path: Path,
+) -> bool:
+    """Persist and relay trainer output without inventing unavailable metrics."""
+
+    if process.stdout is None or process.stderr is None:
+        raise RuntimeError("trainer process pipes were not configured")
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, ("stdout", stdout_path))
+    selector.register(process.stderr, selectors.EVENT_READ, ("stderr", stderr_path))
+    streams = {
+        stdout_path: stdout_path.open("w", encoding="utf-8"),
+        stderr_path: stderr_path.open("w", encoding="utf-8"),
+    }
+    cancelled = False
+    try:
+        while selector.get_map():
+            if experiment.cancellation_file and Path(experiment.cancellation_file).exists():
+                cancelled = True
+                _stop_process(process)
+            if caller.poll() is not None and process.poll() is None:
+                _stop_process(process)
+                raise RuntimeError("frozen caller service exited during training")
+            ready = selector.select(timeout=0.5)
+            for key, _ in ready:
+                channel, path = key.data
+                line = key.fileobj.readline()
+                if line:
+                    safe_line = _redact_line(line)
+                    streams[path].write(safe_line); streams[path].flush()
+                    payload = _structured_trainer_line(safe_line)
+                    if payload is not None:
+                        events.emit("metric", **payload)
+                    else:
+                        events.emit("log", channel=channel, message=safe_line.rstrip("\n"))
+                else:
+                    selector.unregister(key.fileobj)
+            if process.poll() is not None and not ready:
+                # EOF will become readable; keep one bounded pass to drain it.
+                for key in list(selector.get_map().values()):
+                    channel, path = key.data
+                    line = key.fileobj.readline()
+                    if line:
+                        safe_line = _redact_line(line)
+                        streams[path].write(safe_line); streams[path].flush()
+                        payload = _structured_trainer_line(safe_line)
+                        events.emit("metric", **payload) if payload else events.emit(
+                            "log", channel=channel, message=safe_line.rstrip("\n"),
+                        )
+                    else:
+                        selector.unregister(key.fileobj)
+        process.wait()
+        return cancelled
+    finally:
+        selector.close()
+        for stream in streams.values():
+            stream.close()
+
+
+def _structured_trainer_line(line: str) -> dict[str, Any] | None:
+    """Accept only the narrow JSON metric envelope emitted by the GPU plugin."""
+
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or value.get("type") != "metric":
+        return None
+    name, number = value.get("name"), value.get("value")
+    if not isinstance(name, str) or not isinstance(number, (int, float)):
+        return None
+    return {
+        "step": int(value.get("step", 0)), "name": name, "value": float(number),
+        "source": str(value.get("source", "verl-omni")),
+    }
+
+
+def _redact_line(line: str) -> str:
+    safe = line
+    for name, value in os.environ.items():
+        upper = name.upper()
+        if value and len(value) >= 8 and any(marker in upper for marker in ("TOKEN", "SECRET", "PASSWORD", "API_KEY")):
+            safe = safe.replace(value, f"[REDACTED:{name}]")
+    return safe
+
+
+def _stop_process(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill(); process.wait()
+
+
+def _latest_checkpoint(root: Path) -> Path | None:
+    candidates = [
+        item for item in root.rglob("*")
+        if item.name.startswith(("global_step_", "checkpoint_", "checkpoint-"))
+    ]
+    return max(candidates, key=lambda item: item.stat().st_mtime_ns) if candidates else None
+
+
+def _hash_path(path: Path) -> str:
+    if path.is_file():
+        return sha256(path.read_bytes()).hexdigest()
+    digest = sha256()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        digest.update(str(child.relative_to(path)).encode())
+        digest.update(b"\0"); digest.update(child.read_bytes())
+    return digest.hexdigest()
 
 
 def _artifact_manifest(root: Path) -> list[dict[str, Any]]:

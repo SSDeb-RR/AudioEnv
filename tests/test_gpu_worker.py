@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
 from audioenv.contracts import GPUWorkerExperimentV1
-from audioenv.platform.gpu_worker import QwenGPUAllocation, load_experiment, run_experiment
+from audioenv.platform.gpu_worker import (
+    EventWriter, QwenGPUAllocation, _hash_path, _latest_checkpoint,
+    _redact_line, _relay_trainer_process, _structured_trainer_line, load_experiment, run_experiment,
+)
 from audioenv.platform.gpu_runtime import attest_qwen_runtime
 from audioenv.training.tau2_dataset import build_tau2_rollout_dataset
 
@@ -40,6 +44,7 @@ def test_provider_neutral_worker_runs_training_and_emits_artifacts(tmp_path: Pat
     assert "checkpoint.saved" in event_types
     assert "evaluation.completed" in event_types
     assert event_types[-1] == "worker.completed"
+    assert (tmp_path / "output" / "experiment.snapshot.json").is_file()
     manifest = json.loads((tmp_path / "output" / "worker-artifacts.json").read_text())
     assert any(row["path"] == "final.pt" for row in manifest)
 
@@ -140,3 +145,48 @@ def test_gpu_image_copies_dependency_receipt_and_installs_pinned_sources():
     assert "dependencies.lock.json /opt/audioenv/dependencies.lock.json" in dockerfile
     assert "vllm-project/vllm-omni.git@${VLLM_OMNI_COMMIT}" in dockerfile
     assert "verl-project/verl.git@${VERL_COMMIT}" in dockerfile
+
+
+class _LivingCaller:
+    def poll(self): return None
+
+
+def test_trainer_output_relay_persists_logs_and_emits_real_metrics(tmp_path: Path):
+    bundle = GPUWorkerExperimentV1(
+        experiment_id="relay", run_name="relay", backend="tiny-cpu-proof",
+        trainer="audioenv/small-audio-reinforce", algorithm="reinforce",
+        output_dir=str(tmp_path),
+    )
+    script = (
+        "import sys; "
+        "print('plain output', flush=True); "
+        "print('{\"type\":\"metric\",\"step\":2,\"name\":\"loss\",\"value\":0.25}', flush=True); "
+        "print('warning', file=sys.stderr, flush=True)"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", script], stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, bufsize=1,
+    )
+    event_path = tmp_path / "events.jsonl"
+    cancelled = _relay_trainer_process(
+        process, _LivingCaller(), bundle, EventWriter("relay", event_path),
+        stdout_path=tmp_path / "stdout.log", stderr_path=tmp_path / "stderr.log",
+    )
+    assert not cancelled and process.returncode == 0
+    events = [json.loads(line) for line in event_path.read_text().splitlines()]
+    assert any(row["type"] == "metric" and row["payload"]["name"] == "loss" for row in events)
+    assert any(row["type"] == "log" and row["payload"]["channel"] == "stderr" for row in events)
+    assert "plain output" in (tmp_path / "stdout.log").read_text()
+    assert _structured_trainer_line("not json") is None
+
+
+def test_checkpoint_discovery_and_tree_hash_are_deterministic(tmp_path: Path):
+    checkpoint = tmp_path / "global_step_1"; checkpoint.mkdir()
+    (checkpoint / "adapter.bin").write_bytes(b"weights")
+    assert _latest_checkpoint(tmp_path) == checkpoint
+    assert _hash_path(checkpoint) == _hash_path(checkpoint)
+
+
+def test_streamed_logs_redact_secret_environment_values(monkeypatch):
+    monkeypatch.setenv("RUNPOD_API_KEY", "super-secret-value")
+    assert _redact_line("token=super-secret-value") == "token=[REDACTED:RUNPOD_API_KEY]"

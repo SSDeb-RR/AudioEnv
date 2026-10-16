@@ -15,6 +15,10 @@ The worker writes `events.jsonl` and mirrors every line to stdout. Each line is
 a `GPUWorkerEventV1` with a monotonically increasing sequence number. Event
 types cover start, preflight, training, metrics, checkpoints, evaluation,
 artifact manifest, cancellation, failure, and completion.
+VeRL stdout/stderr is relayed as redacted `log` events; only explicit JSON
+metric envelopes become `metric` events. The worker also persists an immutable
+experiment snapshot and content-hashes a discovered checkpoint. Checkpoint
+reload remains false until the separate evaluation gate verifies it.
 
 The local CPU proof backend is executable on development machines. The
 `qwen3-omni-verl` backend performs two fail-closed preflights. Runtime

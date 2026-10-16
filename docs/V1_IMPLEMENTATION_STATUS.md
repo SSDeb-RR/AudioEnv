@@ -18,6 +18,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   Qwen checkpoint revision, pinned tau2 checkout, CUDA runtime, and separately
   hashed/disjoint train and held-out manifests. The image build wrapper rejects
   mutable base tags. Building that image still awaits an approved CUDA digest.
+- The worker now snapshots the immutable experiment, relays real JSON metric
+  envelopes and redacted stdout/stderr as versioned events while preserving
+  local logs, detects and content-hashes the resulting VeRL checkpoint, and
+  marks reload verification honestly as pending until evaluation runs.
 
 - `audioenv app --data-dir .audioenv` applies Alembic migrations, recovers
   abandoned jobs, and serves FastAPI plus the compiled React SPA from one
@@ -183,7 +187,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-103 passed
+106 passed
 
 uv run audioenv validate
 389 passed, 0 failed
