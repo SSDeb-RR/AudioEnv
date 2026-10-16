@@ -42,44 +42,66 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
             "For speech, respond naturally. To end, emit exactly {\"speak\":\"final words\",\"terminate\":true}."
         )}],
     }]
-    prompt_rows: list[tuple[tuple[int, ...], tuple[int, ...], tuple[float, ...]]] = []
+    initial_prompt_ids: tuple[int, ...] | None = None
+    sequence_ids: list[int] = []
+    response_ids: list[int] = []
+    response_mask: list[int] = []
+    response_logprobs: list[float] = []
     audio_paths: list[str] = []
     audio_artifacts: list[dict[str, str]] = []
-    last_audio_hash = None
     last_mm_kwargs: dict[str, Any] = {}
     last_audio_inputs: tuple[Any, ...] = ()
+    previous_audio_count = 0
 
     async def generate(observation: PolicyObservation) -> PolicyTurn:
-        nonlocal last_audio_hash, last_mm_kwargs, last_audio_inputs
-        digest = sha256(observation.caller_audio).hexdigest()
-        if digest != last_audio_hash:
+        nonlocal initial_prompt_ids, last_mm_kwargs, last_audio_inputs, previous_audio_count
+        new_messages: list[dict[str, Any]] = []
+        # A tool result belongs to the existing caller turn. A speech action
+        # obtains a new caller turn, which must be appended even when a caller
+        # happens to repeat byte-identical audio.
+        if observation.turn_index == 1 or observation.tool_result is None:
             path = _write_audio(audio_dir, observation.caller_audio, "caller")
             audio_paths.append(str(path))
             audio_artifacts.append({"path": str(path), "producer": "caller"})
-            messages.append({"role": "user", "content": [{"type": "audio", "audio": str(path)}]})
-            last_audio_hash = digest
+            new_messages.append({"role": "user", "content": [{"type": "audio", "audio": str(path)}]})
         if observation.tool_result is not None:
-            messages.append({
+            new_messages.append({
                 "role": "user", "content": [{"type": "text", "text": "Tool result: " + json.dumps(
                     observation.tool_result, sort_keys=True, separators=(",", ":"),
                 )}],
             })
+        messages.extend(new_messages)
         if observation.turn_index == 1 and observation.tool_schemas:
             messages[0]["content"][0]["text"] += " Available public tools: " + json.dumps(
                 observation.tool_schemas, sort_keys=True, separators=(",", ":"),
             )
-        multimodal = await agent_loop.process_multi_modal_info(messages)
         # VeRL's generic dataset helper extracts path strings. Qwen's processor
         # requires decoded, 16 kHz waveforms, and trainer-side multimodal
         # reconstruction must receive the exact same values as rollout.
         audios = _load_qwen_audio_inputs(messages)
-        multimodal["audios"] = list(audios)
         last_audio_inputs = audios
         mm_kwargs = agent_loop._get_mm_processor_kwargs(audios)
         last_mm_kwargs = dict(mm_kwargs)
-        prompt_ids = await agent_loop.apply_chat_template(
-            messages, audios=audios, mm_processor_kwargs=mm_kwargs,
-        )
+        if initial_prompt_ids is None:
+            prompt_ids = tuple(await agent_loop.apply_chat_template(
+                messages, audios=audios, mm_processor_kwargs=mm_kwargs,
+            ))
+            initial_prompt_ids = prompt_ids
+            sequence_ids.extend(prompt_ids)
+        else:
+            new_audios = audios[previous_audio_count:]
+            observation_ids = tuple(await agent_loop.apply_chat_template(
+                new_messages,
+                audios=new_audios,
+                mm_processor_kwargs=agent_loop._get_mm_processor_kwargs(new_audios),
+                remove_system_prompt=True,
+            ))
+            sequence_ids.extend(observation_ids)
+            response_ids.extend(observation_ids)
+            response_mask.extend([0] * len(observation_ids))
+            response_logprobs.extend([0.0] * len(observation_ids))
+            prompt_ids = tuple(sequence_ids)
+        previous_audio_count = len(audios)
         output = await agent_loop.server_manager.generate(
             request_id=uuid4().hex, prompt_ids=prompt_ids,
             sampling_params={**sampling_params, "logprobs": 0},
@@ -101,7 +123,10 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         if parsed_action is None or parsed_action.kind == "speak":
             agent_path = _write_audio(audio_dir, wav, "agent")
             audio_artifacts.append({"path": str(agent_path), "producer": "agent"})
-        prompt_rows.append((tuple(prompt_ids), tuple(output.token_ids), tuple(float(v) for v in output.log_probs)))
+        sequence_ids.extend(output.token_ids)
+        response_ids.extend(output.token_ids)
+        response_mask.extend([1] * len(output.token_ids))
+        response_logprobs.extend(float(value) for value in output.log_probs)
         messages.append({"role": "assistant", "content": [{"type": "text", "text": semantic}]})
         return PolicyTurn(semantic_text=semantic, audio=wav, metadata={"stop_reason": output.stop_reason})
 
@@ -111,7 +136,8 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         ).run(task_id, seed, generate)
     finally:
         tau2.close()
-    prompt_ids, response_ids, response_mask, logprobs = _flatten_policy_rows(prompt_rows)
+    if initial_prompt_ids is None or not response_ids:
+        raise RuntimeError("tau2 episode produced no policy generations")
     trusted = {
         "terminal": result.terminal_reward,
         "process": result.process_reward,
@@ -138,10 +164,11 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         "actions": [asdict(step.action) for step in result.steps],
     }
     return NativeVerlRollout(
-        prompt_ids=prompt_ids, response_ids=response_ids, response_mask=response_mask,
+        prompt_ids=initial_prompt_ids,
+        response_ids=tuple(response_ids), response_mask=tuple(response_mask),
         # Leave reward_score unset so VeRL invokes compute_audioenv_score and
         # validates the trusted payload against the immutable verifier hash.
-        response_logprobs=logprobs, reward_score=None,
+        response_logprobs=tuple(response_logprobs), reward_score=None,
         num_turns=len(result.steps), audio_inputs=last_audio_inputs,
         audio_paths=tuple(audio_paths),
         mm_processor_kwargs=last_mm_kwargs,

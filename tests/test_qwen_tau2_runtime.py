@@ -94,9 +94,11 @@ class _Tokenizer:
 class _Server:
     def __init__(self):
         self.index = 0
+        self.prompts = []
 
     async def generate(self, **kwargs):
         assert kwargs["sampling_params"]["logprobs"] == 0
+        self.prompts.append(tuple(kwargs["prompt_ids"]))
         token = (10, 11, 12)[self.index]
         self.index += 1
         return SimpleNamespace(
@@ -126,14 +128,17 @@ class _AgentLoop:
     def _get_mm_processor_kwargs(self, audios):
         return {"audio_count": len(audios)}
 
-    async def apply_chat_template(self, messages, *, audios, mm_processor_kwargs):
+    async def apply_chat_template(
+        self, messages, *, audios, mm_processor_kwargs, remove_system_prompt=False,
+    ):
         del messages, audios, mm_processor_kwargs
         prompts = (
             (1, 99, 99, 2),
-            (1, 99, 99, 2, 10, 20),
-            (1, 99, 99, 2, 10, 20, 11, 99, 99, 30),
+            (20,),
+            (99, 99, 30),
         )
         prompt = prompts[self.index]
+        assert remove_system_prompt == (self.index > 0)
         self.index += 1
         return prompt
 
@@ -162,8 +167,9 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
         "audioenv.training.qwen_tau2_runtime.FrozenCallerHTTPClient",
         lambda _url: caller,
     )
+    agent_loop = _AgentLoop()
     rollout = asyncio.run(run_qwen_tau2_rollout(
-        agent_loop=_AgentLoop(),
+        agent_loop=agent_loop,
         sampling_params={"temperature": 0.8},
         sample={
             "task_id": "retail-1", "experiment_id": "exp-1",
@@ -177,6 +183,11 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
     assert rollout.num_turns == 3
     assert rollout.response_mask == (1, 0, 1, 0, 0, 0, 1)
     assert rollout.response_logprobs == pytest.approx((-0.1, 0.0, -0.2, 0.0, 0.0, 0.0, -0.3))
+    assert agent_loop.server_manager.prompts == [
+        (1, 99, 99, 2),
+        (1, 99, 99, 2, 10, 20),
+        (1, 99, 99, 2, 10, 20, 11, 99, 99, 30),
+    ]
     assert len(rollout.audio_paths) == 2
     assert rollout.audio_inputs == decoded_inputs
     assert decode_calls == [2, 4, 6]
