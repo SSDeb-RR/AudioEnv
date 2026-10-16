@@ -84,6 +84,22 @@ def inspect_driver_package(
                 raise ValueError("driver package cannot weaken or reorder required conformance gates")
             if manifest.get("registration_state") != "generated_needs_review":
                 raise ValueError("uploaded driver packages must remain generated_needs_review")
+            if "adapter_spec.json" not in names:
+                raise ValueError("driver package requires adapter_spec.json")
+            try:
+                adapter_spec = json.loads(archive.read("adapter_spec.json"))
+            except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("driver adapter specification is unreadable") from exc
+            if (
+                not isinstance(adapter_spec, dict)
+                or adapter_spec.get("schema_version") != "audioenv.omni-adapter-plan/v1"
+            ):
+                raise ValueError("unsupported Omni adapter plan schema")
+            adapter_plan_hash = sha256(
+                json.dumps(adapter_spec, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            if manifest.get("adapter_plan_sha256") != adapter_plan_hash:
+                raise ValueError("driver adapter plan hash does not match the manifest")
             if "requirements.lock" in names:
                 try:
                     requirements = archive.read("requirements.lock").decode("utf-8")

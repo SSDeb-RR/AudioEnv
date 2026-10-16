@@ -151,6 +151,15 @@ def test_model_foundry_selects_family_driver_and_scaffolds_unknown(tmp_path):
     driver_source = archive.read(next(name for name in archive.namelist() if name.endswith("/driver.py"))).decode()
     assert "conformance_optimizer_step" in driver_source
     assert "NotImplementedError" in driver_source
+    for model_id, family in (
+        ("OpenBMB/MiniCPM-o", "minicpm-o"),
+        ("kyutai/moshi", "moshi"),
+        ("fixie-ai/ultravox", "ultravox"),
+    ):
+        report = foundry.inspect(model_id, model_id)
+        assert report.detected_family == family
+        assert report.registration_state == "generated_needs_review"
+        assert report.generated_files
 
 
 def test_foundry_api_persists_build_and_drives_compatibility(tmp_path):

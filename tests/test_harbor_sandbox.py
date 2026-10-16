@@ -35,7 +35,7 @@ class FakeTransport:
         return HarborTrialResult(1, "c" * 64)
 
 
-def _fixture(tmp_path: Path, *, adversarial: bool = True):
+def _fixture(tmp_path: Path, *, adversarial: bool = True, dockerfile: str = "FROM scratch\n"):
     root = tmp_path / "tasks" / "fix-one"
     (root / "environment").mkdir(parents=True)
     (root / "tests").mkdir()
@@ -45,7 +45,7 @@ def _fixture(tmp_path: Path, *, adversarial: bool = True):
         (root / "adversarial" / "wrong.sh").write_text("#!/bin/sh\nexit 0\n")
     (root / "task.toml").write_text('id = "fix-one"\nsplit = "test"\n')
     (root / "instruction.md").write_text("Fix the public bug.")
-    (root / "environment" / "Dockerfile").write_text("FROM scratch\n")
+    (root / "environment" / "Dockerfile").write_text(dockerfile)
     (root / "tests" / "test.sh").write_text("#!/bin/sh\n# SECRET_EXPECTATION\nexit 0\n")
     (root / "solution" / "solve.sh").write_text("#!/bin/sh\n# SECRET_SOLUTION\n")
     adapter = HarborEnvironmentAdapter(LocalArtifactStore(tmp_path / "artifacts"))
@@ -88,9 +88,8 @@ def test_harbor_validator_reports_unavailable_sandbox_without_execution(tmp_path
 
 
 def test_harbor_validator_rejects_mutable_or_secret_bearing_builds(tmp_path: Path):
-    package, bundles = _fixture(tmp_path)
+    package, bundles = _fixture(tmp_path, dockerfile="FROM python:3.12\nRUN echo unsafe\n")
     transport = FakeTransport()
-    bundles[0].dockerfile.write_text("FROM python:3.12\nRUN echo unsafe\n")
 
     mutable = HarborSandboxValidator(transport).validate(package, bundles)
 
@@ -98,9 +97,11 @@ def test_harbor_validator_rejects_mutable_or_secret_bearing_builds(tmp_path: Pat
     assert transport.builds == []
     assert "mutable base image" in str(mutable["checks"])
 
-    bundles[0].dockerfile.write_text(
-        "FROM registry.example/python@sha256:" + "a" * 64
-        + "\nRUN --mount=type=secret,id=token echo unsafe\n"
+    package, bundles = _fixture(
+        tmp_path / "secret", dockerfile=(
+            "FROM registry.example/python@sha256:" + "a" * 64
+            + "\nRUN --mount=type=secret,id=token echo unsafe\n"
+        ),
     )
     secret_mount = HarborSandboxValidator(transport).validate(package, bundles)
     assert secret_mount["passed"] is False
@@ -109,18 +110,31 @@ def test_harbor_validator_rejects_mutable_or_secret_bearing_builds(tmp_path: Pat
 
 
 def test_harbor_validator_rejects_remote_add(tmp_path: Path):
-    package, bundles = _fixture(tmp_path)
-    transport = FakeTransport()
-    bundles[0].dockerfile.write_text(
-        "FROM registry.example/base@sha256:" + "b" * 64
-        + "\nADD https://example.com/payload /app/payload\n"
+    package, bundles = _fixture(
+        tmp_path, dockerfile=(
+            "FROM registry.example/base@sha256:" + "b" * 64
+            + "\nADD https://example.com/payload /app/payload\n"
+        ),
     )
+    transport = FakeTransport()
 
     report = HarborSandboxValidator(transport).validate(package, bundles)
 
     assert report["passed"] is False
     assert transport.builds == []
     assert "remote ADD" in str(report["checks"])
+
+
+def test_harbor_validator_rejects_source_mutation_after_import(tmp_path: Path):
+    package, bundles = _fixture(tmp_path)
+    transport = FakeTransport()
+    (bundles[0].root / "environment" / "app.txt").write_text("changed after import")
+
+    report = HarborSandboxValidator(transport).validate(package, bundles)
+
+    assert report["passed"] is False
+    assert transport.builds == []
+    assert "source_immutability" in str(report["checks"])
 
 
 def test_real_docker_probe_is_truthful():

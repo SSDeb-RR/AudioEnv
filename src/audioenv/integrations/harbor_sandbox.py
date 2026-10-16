@@ -139,6 +139,22 @@ class HarborSandboxValidator:
         for task in bundles:
             image_tag = f"audioenv-harbor:{task.content_hash[:24]}"
             try:
+                source_before = _task_tree_hash(task)
+            except (OSError, ValueError) as exc:
+                checks.extend((
+                    _check(f"{task.task_id}:source_immutability", False, str(exc)),
+                    _check(f"{task.task_id}:sandbox_build", False, "task source is unsafe"),
+                ))
+                continue
+            source_bound = source_before == task.content_hash
+            checks.append(_check(f"{task.task_id}:source_immutability", source_bound))
+            if not source_bound:
+                checks.append(_check(
+                    f"{task.task_id}:sandbox_build", False,
+                    "task source changed after environment import",
+                ))
+                continue
+            try:
                 _validate_build_definition(task)
                 self.transport.build(task=task, image_tag=image_tag, policy=policy)
                 checks.append(_check(f"{task.task_id}:sandbox_build", True))
@@ -156,6 +172,10 @@ class HarborSandboxValidator:
                     _check(f"{task.task_id}:deterministic_replay", oracle_a == oracle_b and noop_a == noop_b),
                     _check(f"{task.task_id}:state_isolation", noop_a == noop_b),
                     _check(f"{task.task_id}:no_text_leak", _public_boundary_is_clean(package, task)),
+                    _check(
+                        f"{task.task_id}:source_immutability_after",
+                        _task_tree_hash(task) == task.content_hash,
+                    ),
                 ))
             except (OSError, RuntimeError, ValueError) as exc:
                 checks.append(_check(f"{task.task_id}:sandbox_build", False, str(exc)))
@@ -216,6 +236,16 @@ def _validate_build_definition(task: HarborTaskBundle) -> None:
 
 def _verifier_hash(bundles: tuple[HarborTaskBundle, ...]) -> str:
     return sha256(b"\0".join(task.verifier.read_bytes() for task in bundles)).hexdigest()
+
+
+def _task_tree_hash(task: HarborTaskBundle) -> str:
+    content: list[bytes] = []
+    for path in sorted(task.root.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("Harbor task source gained a symbolic link after import")
+        if path.is_file():
+            content.extend((path.relative_to(task.root).as_posix().encode(), path.read_bytes()))
+    return sha256(b"\0".join(content)).hexdigest()
 
 
 def _public_boundary_is_clean(package: EnvironmentPackageV1, task: HarborTaskBundle) -> bool:

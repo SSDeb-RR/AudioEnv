@@ -143,6 +143,8 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   token/log-probability lineage, speech rendering, LoRA scope, and checkpoint
   round trips. MiniCPM-o, Moshi, and Ultravox names receive distinct family
   scaffolds but remain unavailable until isolated conformance passes.
+  Upload intake recomputes the canonical adapter-plan hash, so a plan cannot be
+  changed independently of its reviewed manifest before isolated execution.
 - Model registration now persists a separate `certified`, `conformant`,
   `generated_needs_review`, or `rejected` state. A successful dependency probe
   alone cannot mark a model usable; only the built-in certified local proof or
@@ -200,6 +202,8 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   and secret, SSH, or bind build mounts before invoking the container
   transport, preventing generated tasks from weakening image reproducibility
   or importing operator secrets during bootstrap.
+  It also recomputes the complete task-tree hash before and after validation;
+  source mutation between import, oracle execution, and promotion fails closed.
 - Environment promotion no longer accepts caller-supplied gate booleans. The
   backend aggregates persisted validator checks, hashes the protected verifier
   artifact, issues content-addressed HMAC-signed evidence with a locally held
@@ -452,7 +456,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-190 passed
+191 passed
 
 uv run audioenv validate
 389 passed, 0 failed

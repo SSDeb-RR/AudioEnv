@@ -97,7 +97,8 @@ def aggregate_validation_checks(validation: dict[str, Any]) -> dict[str, bool]:
     build_names = [
         name for name in by_name
         if name == "tool_handlers_complete" or name.startswith("audio_profile:")
-        or name.endswith(":sandbox_build")
+        or name.endswith(":sandbox_build") or name.endswith(":source_immutability")
+        or name.endswith(":source_immutability_after")
     ]
     sandbox_build = bool(build_names) and all(by_name[name] for name in build_names)
     oracle = all_suffix(":oracle_pass")

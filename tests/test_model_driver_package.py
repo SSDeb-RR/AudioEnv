@@ -42,6 +42,16 @@ def test_driver_package_intake_binds_model_module_and_all_gates():
     with pytest.raises(ValueError, match="model_id"):
         inspect_driver_package(payload, expected_model_id="another/model")
 
+    tampered = _rewrite(payload, extra=(
+        "adapter_spec.json",
+        json.dumps({
+            "schema_version": "audioenv.omni-adapter-plan/v1",
+            "model_type": "silently-changed",
+        }).encode(),
+    ))
+    with pytest.raises(ValueError, match="plan hash"):
+        inspect_driver_package(tampered, expected_model_id=MODEL_ID)
+
 
 def test_driver_package_rejects_traversal_native_code_and_unlocked_dependencies():
     payload = build_driver_scaffold(MODEL_ID, "/models/novel", "novel")
