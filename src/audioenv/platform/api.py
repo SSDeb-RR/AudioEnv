@@ -234,7 +234,7 @@ def create_app(
 
     @app.get("/api/overview")
     def overview() -> dict[str, Any]:
-        return repository.overview()
+        return _redact_public(repository.overview())
 
     @app.post("/api/projects", status_code=201)
     def create_project(request: ProjectCreate) -> dict[str, Any]:
@@ -432,6 +432,10 @@ def create_app(
 
     @app.post("/api/models", status_code=201)
     def register_model(request: ModelCreate) -> dict[str, Any]:
+        try:
+            _assert_no_embedded_secrets(request.config)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         row = repository.register_model(
             request.id, request.display_name, request.adapter_type, request.role,
             request.config, request.project_id,
@@ -859,7 +863,11 @@ def create_app(
     def create_experiment(request: ExperimentCreate) -> dict[str, Any]:
         if request.project_id and repository.get_project(request.project_id) is None:
             raise HTTPException(422, "project not found")
-        return serialize_experiment(repository.create_experiment(
+        try:
+            _assert_no_embedded_secrets(request.config)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return _public_experiment(repository.create_experiment(
             request.name, request.config, project_id=request.project_id,
         ))
 
@@ -880,6 +888,10 @@ def create_app(
             raise HTTPException(409, "checkpoint artifact failed content-hash verification")
 
         config = json.loads(source.config_json)
+        try:
+            _assert_no_embedded_secrets(config)
+        except ValueError as exc:
+            raise HTTPException(409, f"source experiment contains unsafe persisted secrets: {exc}") from exc
         provider_id = str(config.get("provider_id", "local-subprocess"))
         artifact_metadata = json.loads(artifact.metadata_json)
         if provider_id != "local-subprocess" and not (
@@ -918,18 +930,18 @@ def create_app(
         repository.add_log(source.id, "Child resume draft created", payload={
             **lineage, "child_experiment_id": child.id,
         })
-        return serialize_experiment(child)
+        return _public_experiment(child)
 
     @app.get("/api/experiments")
     def list_experiments() -> list[dict[str, Any]]:
-        return [serialize_experiment(row) for row in repository.list_experiments()]
+        return [_public_experiment(row) for row in repository.list_experiments()]
 
     @app.get("/api/experiments/{experiment_id}")
     def get_experiment(experiment_id: str) -> dict[str, Any]:
         record = repository.get_experiment(experiment_id)
         if record is None:
             raise HTTPException(404, "experiment not found")
-        return serialize_experiment(record)
+        return _public_experiment(record)
 
     @app.post("/api/experiments/{experiment_id}/preflight")
     def preflight(experiment_id: str) -> dict[str, Any]:
@@ -943,7 +955,7 @@ def create_app(
     @app.post("/api/experiments/{experiment_id}/transition")
     def transition(experiment_id: str, request: TransitionRequest) -> dict[str, Any]:
         try:
-            return serialize_experiment(repository.transition(experiment_id, request.target, request.payload))
+            return _public_experiment(repository.transition(experiment_id, request.target, request.payload))
         except KeyError:
             raise HTTPException(404, "experiment not found") from None
         except InvalidTransition as exc:
@@ -998,7 +1010,7 @@ def create_app(
                 })
             except InvalidTransition as exc:
                 raise HTTPException(409, str(exc)) from exc
-        return serialize_experiment(record)
+        return _public_experiment(record)
 
     @app.get("/api/experiments/{experiment_id}/compute-resources")
     def compute_resources(experiment_id: str) -> list[dict[str, Any]]:
@@ -1348,7 +1360,8 @@ def create_app(
             raise HTTPException(404, "experiment not found")
         return [{
             "id": row.id, "level": row.level, "message": row.message,
-            "payload": json.loads(row.payload_json), "created_at": row.created_at.isoformat(),
+            "payload": _redact_public(json.loads(row.payload_json)),
+            "created_at": row.created_at.isoformat(),
         } for row in repository.list_logs(experiment_id)]
 
     @app.post("/api/experiments/{experiment_id}/export", status_code=201)
@@ -1429,7 +1442,7 @@ def create_app(
                 record = repository.get_experiment(experiment_id)
                 if record is None:
                     return
-                encoded = json.dumps(serialize_experiment(record), separators=(",", ":"))
+                encoded = json.dumps(_public_experiment(record), separators=(",", ":"))
                 if encoded != last:
                     yield f"event: experiment\ndata: {encoded}\n\n"
                     last = encoded
@@ -2182,6 +2195,51 @@ def _sync_modal_resource(app, repository: PlatformRepository, record, resource) 
     return {"resource": _compute_resource(resource), "events_synced": len(events), "artifact_ids": artifacts}
 
 
+_SECRET_VALUE_MARKERS = (
+    "secret", "password", "credential", "api_key", "api_token",
+    "access_token", "auth_token", "private_key",
+)
+_SECRET_REFERENCE_SUFFIXES = ("secret_name", "secret_names", "secret_reference")
+
+
+def _is_secret_value_key(key: str) -> bool:
+    folded = key.casefold()
+    return (
+        any(marker in folded for marker in _SECRET_VALUE_MARKERS)
+        and not folded.endswith(_SECRET_REFERENCE_SUFFIXES)
+    )
+
+
+def _assert_no_embedded_secrets(value: Any, path: tuple[str, ...] = ()) -> None:
+    if isinstance(value, dict):
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            if _is_secret_value_key(key) and item not in (None, "", [], {}):
+                location = ".".join((*path, key))
+                raise ValueError(
+                    f"secret value at {location}; store an environment/provider secret name instead",
+                )
+            _assert_no_embedded_secrets(item, (*path, key))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _assert_no_embedded_secrets(item, (*path, str(index)))
+
+
+def _redact_public(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): "[REDACTED]" if _is_secret_value_key(str(key)) else _redact_public(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_public(item) for item in value]
+    return value
+
+
+def _public_experiment(row) -> dict[str, Any]:
+    return _redact_public(serialize_experiment(row))
+
+
 def _project(row) -> dict[str, Any]:
     return {"id": row.id, "name": row.name, "description": row.description, "created_at": row.created_at.isoformat()}
 
@@ -2190,7 +2248,8 @@ def _compute_resource(row) -> dict[str, Any]:
     return {
         "id": row.id, "experiment_id": row.experiment_id, "provider": row.provider,
         "external_id": row.external_id, "status": row.status,
-        "config": json.loads(row.config_json), "created_at": row.created_at.isoformat(),
+        "config": _redact_public(json.loads(row.config_json)),
+        "created_at": row.created_at.isoformat(),
     }
 
 
@@ -2200,7 +2259,7 @@ def _model(row) -> dict[str, Any]:
         "adapter_type": row.adapter_type, "role": row.role, "available": row.available,
         "registration_state": row.registration_state,
         "probe": json.loads(row.probe_json) if row.probe_json else None,
-        "config": json.loads(row.config_json),
+        "config": _redact_public(json.loads(row.config_json)),
     }
 
 
@@ -2320,7 +2379,8 @@ def _artifact(row) -> dict[str, Any]:
     return {
         "id": row.id, "project_id": row.project_id, "experiment_id": row.experiment_id,
         "kind": row.kind, "media_type": row.media_type, "size_bytes": row.size_bytes,
-        "metadata": json.loads(row.metadata_json), "download_url": f"/api/artifacts/{row.id}/download",
+        "metadata": _redact_public(json.loads(row.metadata_json)),
+        "download_url": f"/api/artifacts/{row.id}/download",
     }
 
 
@@ -2374,7 +2434,8 @@ def _evaluation(repository: PlatformRepository, row, *, samples: bool = False) -
         "id": row.id, "project_id": row.project_id, "experiment_id": row.experiment_id,
         "checkpoint_id": row.checkpoint_id, "environment_hash": row.environment_hash,
         "verifier_hash": row.verifier_hash, "split": row.split,
-        "protocol_hash": row.protocol_hash, "config": json.loads(row.config_json),
+        "protocol_hash": row.protocol_hash,
+        "config": _redact_public(json.loads(row.config_json)),
         "metrics": json.loads(row.metrics_json),
     }
     if samples:

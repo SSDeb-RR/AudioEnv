@@ -36,6 +36,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 - Projects, registries, configuration hashes, preflight snapshots, lifecycle
   events, metrics, worker logs, evaluations, samples, comparisons, and
   artifacts persist in SQLite.
+- Generic model and experiment APIs reject embedded passwords, API keys,
+  tokens, credentials, private keys, and secret values; callers must provide
+  environment/provider secret references instead. Public experiment, model,
+  compute-resource, log, artifact, overview, SSE, and evaluation responses also
+  redact unsafe legacy fields so previously persisted values cannot leak into
+  the dashboard or API.
 - The dashboard has Projects, Models, Benchmarks & Tasks, Environments,
   Training Runs, Evaluations, Artifacts, and Settings. Its run wizard selects
   persisted resources, performs preflight, shows hardware/cost, and requires
@@ -347,7 +353,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-165 passed
+166 passed
 
 uv run audioenv validate
 389 passed, 0 failed

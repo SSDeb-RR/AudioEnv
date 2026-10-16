@@ -202,6 +202,43 @@ def test_api_uses_persisted_records(tmp_path):
     assert invalid.status_code == 409
 
 
+def test_api_rejects_secret_values_and_redacts_legacy_records(tmp_path):
+    app = create_app(f"sqlite:///{tmp_path / 'secret-boundary.sqlite'}")
+    client = TestClient(app)
+
+    rejected_run = client.post("/api/experiments", json={
+        "name": "unsafe", "config": {"provider": {"api_token": "plaintext-secret"}},
+    })
+    assert rejected_run.status_code == 422
+    assert "store an environment/provider secret name" in rejected_run.text
+    rejected_model = client.post("/api/models", json={
+        "id": "unsafe/model", "display_name": "Unsafe", "adapter_type": "custom",
+        "role": "agent", "config": {"password": "plaintext-secret"},
+    })
+    assert rejected_model.status_code == 422
+
+    accepted = client.post("/api/experiments", json={
+        "name": "safe references", "config": {
+            "api_key_secret_name": "RUNPOD_API_KEY",
+            "secret_names": ["HF_TOKEN"], "token_logprobs": True,
+        },
+    })
+    assert accepted.status_code == 201
+    assert accepted.json()["config"]["api_key_secret_name"] == "RUNPOD_API_KEY"
+
+    legacy = app.state.repository.create_experiment(
+        "legacy unsafe", {"provider": {"api_token": "legacy-plaintext"}},
+    )
+    app.state.repository.add_log(
+        legacy.id, "legacy event", payload={"password": "legacy-password", "safe": "visible"},
+    )
+    public = client.get(f"/api/experiments/{legacy.id}").json()
+    assert public["config"]["provider"]["api_token"] == "[REDACTED]"
+    logs = client.get(f"/api/experiments/{legacy.id}/logs").json()
+    assert logs[0]["payload"] == {"password": "[REDACTED]", "safe": "visible"}
+    assert "legacy-plaintext" not in json.dumps(client.get("/api/overview").json())
+
+
 def test_custom_environment_api_persists_validated_boundary(tmp_path):
     client = TestClient(create_app(f"sqlite:///{tmp_path / 'custom.sqlite'}"))
     response = client.post(
