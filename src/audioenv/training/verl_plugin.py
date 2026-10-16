@@ -16,11 +16,15 @@ from ..contracts import TrajectoryV2
 from .verl_runtime import NativeVerlRollout
 
 if os.environ.get("AUDIOENV_ENABLE_NATIVE_AUDIO_BRIDGE") == "1":
+    from .gradient_audit import install_gradient_audit
+    from .logprob_audit import install_logprob_audit
     from .vllm_audio_bridge import install_native_audio_bridge
     from .verl_trajectory_bridge import install_trajectory_finalize_bridge
 
     install_native_audio_bridge()
     install_trajectory_finalize_bridge()
+    install_gradient_audit()
+    install_logprob_audit()
 
 try:  # Imported only inside the pinned CUDA worker environment.
     from verl.experimental.agent_loop.agent_loop import (

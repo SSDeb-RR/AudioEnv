@@ -108,6 +108,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   and rejects post-reload outcome drift. It exports protocol-hashed baseline,
   reloaded-trained, paired-comparison, and checkpoint-reload evidence. This is
   contract-tested locally; real results remain CUDA-gated.
+- The pinned VeRL FSDP optimizer is now instrumented in each worker rank. Every
+  step records the non-zero gradient names, declared trainable names, finite
+  gradient norm, and before/after trainable-parameter hashes; training fails if
+  anything outside `q_proj`/`k_proj`/`v_proj`/`o_proj` LoRA receives gradients,
+  a rank is missing, or parameters do not change. The trainer controller also
+  recomputes policy log-probabilities and fails before loss computation when
+  masked rollout/training drift exceeds the configured tolerance. Both evidence
+  summaries are exported, but real distributed evidence remains CUDA-gated.
 - The Qwen rollout now selects vLLM-Omni's full Thinker → Talker → Code2Wav
   pipeline. A revision-pinned bridge retains the stage-0 policy tokens and
   log-probabilities plus the stage-2 waveform from the same generation request
@@ -198,7 +206,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-110 passed
+115 passed
 
 uv run audioenv validate
 389 passed, 0 failed

@@ -32,6 +32,8 @@ from ..training.qwen_evaluation import (
     evaluation_from_verl_dump, evaluation_protocol_from_dataset, evaluation_sample_keys_from_dataset, newest_dump,
     verify_reloaded_checkpoint, write_evaluation_bundle,
 )
+from ..training.gradient_audit import validate_gradient_evidence
+from ..training.logprob_audit import validate_logprob_evidence
 
 
 class EventWriter:
@@ -175,6 +177,9 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
             "AUDIOENV_CALLER_URL": caller_url,
             "AUDIOENV_TAU2_CHECKOUT": str(Path(experiment.tau2_checkout or "").resolve()),
             "AUDIOENV_ROLLOUT_AUDIO_DIR": str((output / "rollout-audio").resolve()),
+            "AUDIOENV_GRADIENT_EVIDENCE_DIR": str((output / "gradient-evidence").resolve()),
+            "AUDIOENV_LOGPROB_EVIDENCE_DIR": str((output / "logprob-evidence").resolve()),
+            "AUDIOENV_LOGPROB_MAX_ABS_ERROR": str(hp.get("logprob_max_abs_error", 0.05)),
         })
         process = subprocess.Popen(
             command, cwd=config.checkout, env=train_environment,
@@ -188,6 +193,20 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
             return 130
         if process.returncode:
             raise RuntimeError(f"VeRL-Omni exited with status {process.returncode}; inspect trainer logs")
+        gradient_summary = validate_gradient_evidence(
+            output / "gradient-evidence", expected_ranks=config.gpus_per_node,
+        )
+        gradient_path = output / "gradient-summary.json"
+        gradient_path.write_text(
+            json.dumps(gradient_summary, sort_keys=True, indent=2) + "\n", encoding="utf-8",
+        )
+        events.emit("training.evidence", evidence=gradient_summary, path=str(gradient_path))
+        logprob_summary = validate_logprob_evidence(output / "logprob-evidence")
+        logprob_path = output / "logprob-summary.json"
+        logprob_path.write_text(
+            json.dumps(logprob_summary, sort_keys=True, indent=2) + "\n", encoding="utf-8",
+        )
+        events.emit("training.evidence", evidence=logprob_summary, path=str(logprob_path))
         checkpoint = _latest_checkpoint(output)
         if checkpoint is None:
             raise RuntimeError("VeRL completed without a discoverable global_step_ checkpoint")

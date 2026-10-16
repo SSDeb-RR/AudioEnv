@@ -28,6 +28,15 @@ and reloaded sample outcomes match. Baseline and reloaded-trained results are
 bound to identical environment, verifier, split-manifest, caller, audio,
 sampling, and seed hashes before a paired comparison is exported.
 
+AudioEnv patches the pinned VeRL FSDP optimizer inside each Ray worker to emit
+per-rank gradient evidence. The run is rejected unless every configured actor
+rank reports finite gradients exclusively on the four declared Thinker LoRA
+targets and a changed trainable-parameter hash. Before advantage/loss
+calculation, the controller compares rollout token log-probabilities with the
+actor's recomputed values on response-mask tokens and rejects non-finite values
+or drift above `logprob_max_abs_error` (default `0.05`). Both summaries are
+content-hashed reproducibility artifacts.
+
 The local CPU proof backend is executable on development machines. The
 `qwen3-omni-verl` backend performs two fail-closed preflights. Runtime
 attestation compares the experiment pins with the dependency receipt embedded
