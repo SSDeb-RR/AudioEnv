@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import shutil
 import subprocess
 import sys
 import time
@@ -132,6 +133,14 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
     )
     if not runtime.available:
         raise RuntimeError("GPU runtime attestation failed: " + "; ".join(runtime.reasons))
+    environment_lock = runtime.evidence.get("python_environment_lock", {})
+    environment_lock_path = Path(str(environment_lock.get("path", "")))
+    if not environment_lock_path.is_file():
+        raise RuntimeError("attested Python environment lock disappeared before training")
+    exported_environment_lock = output / "python-environment.lock"
+    shutil.copyfile(environment_lock_path, exported_environment_lock)
+    if sha256(exported_environment_lock.read_bytes()).hexdigest() != environment_lock.get("sha256"):
+        raise RuntimeError("resolved Python environment lock changed after attestation")
     trainer = VerlOmniGSPOTrainer() if experiment.algorithm == "gspo" else VerlOmniGRPOTrainer()
     hp = experiment.hyperparameters
     config = VerlOmniConfig(

@@ -29,13 +29,16 @@ RUN python -m pip install --no-cache-dir \
     && python -m pip install --no-cache-dir \
       "verl-omni[audio] @ git+https://github.com/verl-project/verl-omni.git@${VERL_OMNI_COMMIT}" \
       "tau2 @ git+https://github.com/sierra-research/tau2-bench.git@${TAU2_COMMIT}" \
-    && python -m pip install --no-cache-dir /tmp/audioenv.whl
+    && python -m pip install --no-cache-dir /tmp/audioenv.whl \
+    && python -m pip freeze --all | LC_ALL=C sort > /opt/audioenv/python-environment.lock \
+    && test -s /opt/audioenv/python-environment.lock
 
 # Fail the immutable image build if either pinned upstream changes an API that
 # AudioEnv's agent-loop, multimodal output, or protected reward path relies on.
 RUN audioenv-verl-contract-check
 
 ENV AUDIOENV_DEPENDENCY_LOCK=/opt/audioenv/dependencies.lock.json
+ENV AUDIOENV_PYTHON_ENVIRONMENT_LOCK=/opt/audioenv/python-environment.lock
 
 RUN useradd --create-home --uid 10001 audioenv \
     && mkdir -p /workspace \

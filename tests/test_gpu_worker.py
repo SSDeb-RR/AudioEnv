@@ -106,6 +106,8 @@ def _qwen_attestation_fixture(tmp_path: Path):
     lock = json.loads((Path(__file__).parents[1] / "docker/gpu-worker/dependencies.lock.json").read_text())
     lock_path = tmp_path / "lock.json"
     lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    python_environment_path = tmp_path / "python-environment.lock"
+    python_environment_path.write_text("audioenv-foundry==0.5.0\ntorch==2.9.0\n", encoding="utf-8")
     model = tmp_path / "model"; model.mkdir()
     (model / "audioenv-model-revision.json").write_text(
         json.dumps({"revision": lock["qwen_model_revision"]}), encoding="utf-8",
@@ -127,31 +129,55 @@ def _qwen_attestation_fixture(tmp_path: Path):
         verl_checkout=str(checkout), tau2_checkout=str(checkout), output_dir=str(tmp_path / "out"),
         dependency_pins={key: str(value) for key, value in lock.items() if key not in {"schema_version", "base_image_policy"}},
     )
-    return bundle, lock_path
+    return bundle, lock_path, python_environment_path
 
 
 def test_qwen_runtime_attests_lock_model_and_disjoint_datasets(tmp_path: Path, monkeypatch):
-    bundle, lock_path = _qwen_attestation_fixture(tmp_path)
+    bundle, lock_path, python_environment_path = _qwen_attestation_fixture(tmp_path)
     monkeypatch.setattr("audioenv.platform.gpu_runtime._git_revision", lambda _path: bundle.dependency_pins["tau2_commit"])
-    report = attest_qwen_runtime(bundle, lock_path=lock_path, probe_cuda=False, probe_packages=False)
+    report = attest_qwen_runtime(
+        bundle, lock_path=lock_path, python_environment_path=python_environment_path,
+        probe_cuda=False, probe_packages=False,
+    )
     assert report.available, report.reasons
+    assert report.evidence["python_environment_lock"]["distribution_count"] == 2
     assert report.evidence["rollout_dataset"]["split"] == "train"
     assert report.evidence["validation_dataset"]["split"] == "test"
 
 
 def test_qwen_runtime_rejects_dependency_and_dataset_tampering(tmp_path: Path, monkeypatch):
-    bundle, lock_path = _qwen_attestation_fixture(tmp_path)
+    bundle, lock_path, python_environment_path = _qwen_attestation_fixture(tmp_path)
     monkeypatch.setattr("audioenv.platform.gpu_runtime._git_revision", lambda _path: bundle.dependency_pins["tau2_commit"])
     altered = bundle.model_copy(update={"dependency_pins": {**bundle.dependency_pins, "vllm_omni_commit": "wrong"}})
     Path(bundle.rollout_dataset_path).write_text("{}\n", encoding="utf-8")
-    report = attest_qwen_runtime(altered, lock_path=lock_path, probe_cuda=False, probe_packages=False)
+    report = attest_qwen_runtime(
+        altered, lock_path=lock_path, python_environment_path=python_environment_path,
+        probe_cuda=False, probe_packages=False,
+    )
     assert not report.available
     assert any("vllm_omni_commit" in reason for reason in report.reasons)
     assert any("dataset hash" in reason for reason in report.reasons)
 
 
+def test_qwen_runtime_requires_resolved_python_environment_evidence(tmp_path: Path, monkeypatch):
+    bundle, lock_path, python_environment_path = _qwen_attestation_fixture(tmp_path)
+    python_environment_path.unlink()
+    monkeypatch.setattr(
+        "audioenv.platform.gpu_runtime._git_revision",
+        lambda _path: bundle.dependency_pins["tau2_commit"],
+    )
+
+    report = attest_qwen_runtime(
+        bundle, lock_path=lock_path, python_environment_path=python_environment_path,
+        probe_cuda=False, probe_packages=False,
+    )
+
+    assert not report.available
+    assert any("resolved Python environment lock does not exist" in reason for reason in report.reasons)
+
+
 def test_qwen_runtime_rejects_verl_api_contract_drift(tmp_path: Path, monkeypatch):
-    bundle, lock_path = _qwen_attestation_fixture(tmp_path)
+    bundle, lock_path, python_environment_path = _qwen_attestation_fixture(tmp_path)
     monkeypatch.setattr(
         "audioenv.platform.gpu_runtime._git_revision",
         lambda _path: bundle.dependency_pins["tau2_commit"],
@@ -166,7 +192,8 @@ def test_qwen_runtime_rejects_verl_api_contract_drift(tmp_path: Path, monkeypatc
         lambda: (_ for _ in ()).throw(RuntimeError("upstream field drift")),
     )
     report = attest_qwen_runtime(
-        bundle, lock_path=lock_path, probe_cuda=False, probe_packages=True,
+        bundle, lock_path=lock_path, python_environment_path=python_environment_path,
+        probe_cuda=False, probe_packages=True,
     )
     assert not report.available
     assert any("VeRL runtime contract failed: upstream field drift" in reason for reason in report.reasons)
@@ -282,6 +309,8 @@ def test_gpu_image_copies_dependency_receipt_and_installs_pinned_sources():
     assert "dependencies.lock.json /opt/audioenv/dependencies.lock.json" in dockerfile
     assert "vllm-project/vllm-omni.git@${VLLM_OMNI_COMMIT}" in dockerfile
     assert "verl-project/verl.git@${VERL_COMMIT}" in dockerfile
+    assert "pip freeze --all" in dockerfile
+    assert "/opt/audioenv/python-environment.lock" in dockerfile
 
 
 class _LivingCaller:

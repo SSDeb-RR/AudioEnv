@@ -186,6 +186,14 @@ digest-qualified image reference before a GPU launch.
 The dependency receipt records the AudioEnv, Qwen checkpoint, VeRL-Omni, VeRL,
 vLLM-Omni, tau2, and Repo2RLEnv revisions and is copied into the image at
 `/opt/audioenv/dependencies.lock.json`.
+After every package installation, the image also records the deterministically
+sorted result of `pip freeze --all` at
+`/opt/audioenv/python-environment.lock`. Runtime attestation refuses to start
+Qwen when this resolved lock is absent, empty, or unsorted, includes its hash
+and distribution count in the preflight evidence, and copies the exact file
+into the run artifacts after verifying that its hash did not change. This
+captures transitive packages selected during the image build without claiming
+that a later rebuild from the source-pin receipt alone is byte-identical.
 The build also retains detached, commit-verified VeRL-Omni and tau2 source
 checkouts under `/opt/audioenv/checkouts`; runtime attestation and the launcher
 use those exact paths. Tau2 is installed in the worker rather than merely

@@ -18,6 +18,7 @@ from ..training.vllm_audio_bridge import PINNED_VLLM_OMNI_COMMIT
 
 LOCK_SCHEMA = "audioenv.gpu-worker-dependencies/v1"
 DEFAULT_LOCK_PATH = Path("/opt/audioenv/dependencies.lock.json")
+DEFAULT_PYTHON_ENVIRONMENT_PATH = Path("/opt/audioenv/python-environment.lock")
 REQUIRED_LOCK_VALUES = {
     "verl_omni_commit": PINNED_VERL_OMNI_COMMIT,
     "vllm_omni_commit": PINNED_VLLM_OMNI_COMMIT,
@@ -37,6 +38,7 @@ def attest_qwen_runtime(
     experiment: GPUWorkerExperimentV1,
     *,
     lock_path: Path | None = None,
+    python_environment_path: Path | None = None,
     probe_cuda: bool = True,
     probe_packages: bool = True,
 ) -> RuntimeAttestation:
@@ -51,6 +53,12 @@ def attest_qwen_runtime(
     evidence: dict[str, Any] = {}
     selected_lock = lock_path or Path(os.environ.get("AUDIOENV_DEPENDENCY_LOCK", DEFAULT_LOCK_PATH))
     lock = _load_lock(selected_lock, reasons)
+    selected_python_environment = python_environment_path or Path(
+        os.environ.get("AUDIOENV_PYTHON_ENVIRONMENT_LOCK", DEFAULT_PYTHON_ENVIRONMENT_PATH)
+    )
+    python_environment = _attest_python_environment(selected_python_environment, reasons)
+    if python_environment:
+        evidence["python_environment_lock"] = python_environment
     if lock:
         evidence["dependency_lock_sha256"] = sha256(selected_lock.read_bytes()).hexdigest()
         evidence["dependency_lock"] = lock
@@ -128,6 +136,30 @@ def attest_qwen_runtime(
     if probe_cuda:
         _probe_cuda(reasons, evidence)
     return RuntimeAttestation(not reasons, tuple(reasons), evidence)
+
+
+def _attest_python_environment(path: Path, reasons: list[str]) -> dict[str, Any]:
+    """Bind the resolved build environment, not only top-level source pins."""
+
+    if not path.is_file():
+        reasons.append(f"resolved Python environment lock does not exist: {path}")
+        return {}
+    try:
+        payload = path.read_bytes()
+        lines = tuple(line for line in payload.decode("utf-8").splitlines() if line.strip())
+    except (OSError, UnicodeDecodeError) as exc:
+        reasons.append(f"resolved Python environment lock is unreadable: {exc}")
+        return {}
+    if not lines:
+        reasons.append("resolved Python environment lock is empty")
+        return {}
+    if tuple(sorted(lines)) != lines:
+        reasons.append("resolved Python environment lock must be deterministically sorted")
+    return {
+        "path": str(path.resolve()),
+        "sha256": sha256(payload).hexdigest(),
+        "distribution_count": len(lines),
+    }
 
 
 def _load_lock(path: Path, reasons: list[str]) -> dict[str, Any]:
