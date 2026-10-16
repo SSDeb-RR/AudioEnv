@@ -28,7 +28,10 @@ class NativeVerlRollout:
     response_ids: tuple[int, ...]
     response_mask: tuple[int, ...]
     response_logprobs: tuple[float, ...]
-    reward_score: float
+    # None forces VeRL's configured reward loop to invoke AudioEnv's
+    # hash-bound scorer. Supplying a float would create rm_scores early and
+    # silently bypass the custom reward function.
+    reward_score: float | None
     num_turns: int
     audio_paths: tuple[str, ...]
     mm_processor_kwargs: dict[str, Any] = field(default_factory=dict)

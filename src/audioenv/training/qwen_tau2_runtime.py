@@ -122,7 +122,9 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
     }
     return NativeVerlRollout(
         prompt_ids=prompt_ids, response_ids=response_ids, response_mask=response_mask,
-        response_logprobs=logprobs, reward_score=result.terminal_reward,
+        # Leave reward_score unset so VeRL invokes compute_audioenv_score and
+        # validates the trusted payload against the immutable verifier hash.
+        response_logprobs=logprobs, reward_score=None,
         num_turns=len(result.steps), audio_paths=tuple(audio_paths),
         mm_processor_kwargs=last_mm_kwargs,
         extra_fields={

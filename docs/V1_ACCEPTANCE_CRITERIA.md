@@ -67,7 +67,7 @@ reported as a preview, not AudioEnv V1 complete.
 | Isolated declarative validator | PASS | Subprocess reconstructs the custom environment under bounded input/time/resources and registration requires exact environment/verifier hash parity |
 | Qwen3-Omni dependency probe | PASS | Dependencies import; probe correctly blocks on missing CUDA and local checkpoint without downloading |
 | Real Qwen native-audio episode | BLOCKED | No CUDA device or checkpoint on the audit host |
-| VeRL-Omni launch and reward contract | PASS, LIMITED | Launcher matches pinned V1 `main_omni` recipe; frozen caller, tau2 protected episode controller, live-policy runtime, hash-bound reward, native multimodal handoff, and postprocessor-derived `TrajectoryV2` are contract-tested; CUDA execution remains incomplete |
+| VeRL-Omni launch and reward contract | PASS, LIMITED | Launcher matches pinned V1 `main_omni` recipe; the agent loop leaves `reward_score` unset so VeRL cannot bypass AudioEnv's hash-bound scorer, while frozen caller, tau2 protected episode controller, live-policy runtime, native multimodal handoff, and postprocessor-derived `TrajectoryV2` are contract-tested; CUDA execution remains incomplete |
 | VeRL-Omni GSPO and GRPO update | BLOCKED | Each algorithm still requires a separately approved multi-GPU worker and real agent-loop acceptance |
 | Modal execution-provider contract | PASS, LIMITED | Mock transport verifies immutable staging, fresh quote and typed confirmation, gVisor request, event replay, budget stop, cancellation, reconnect, and hash-checked artifact collection; live SDK and paid Sandbox run not executed |
 | Independent caller transfer | NOT RUN | Depends on the real native-audio training run |

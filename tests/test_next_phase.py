@@ -293,6 +293,11 @@ def test_verl_reward_uses_only_hash_bound_protected_payload():
     with pytest.raises(ValueError, match="verifier hash mismatch"):
         compute_audioenv_score("audioenv/tau2-retail", "", None, bad)
 
+    trajectory = _trajectory(1.0, 9)
+    payload = trajectory_to_verl_payload(trajectory)
+    assert payload.reward_score is None
+    assert payload.extra_fields["audioenv_verifier_hash"] == trajectory.verifier_hash
+
 
 def test_verl_native_runtime_refuses_implicit_scripted_fallback(monkeypatch):
     from audioenv.training.verl_runtime import _runtime_factory

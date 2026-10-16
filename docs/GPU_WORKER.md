@@ -39,6 +39,11 @@ audio-tower modules from optimization, and applies LoRA only to `q_proj`,
 VeRL loads `audioenv.training.verl_plugin` in its driver and Ray workers. The
 plugin exposes a hash-bound reward function that ignores model-printed answers
 and accepts only the protected verifier result produced by the environment.
+The agent loop intentionally returns no precomputed `reward_score`; otherwise
+VeRL would create `rm_scores` immediately and skip the configured reward
+manager. The protected result and expected verifier hash travel as tool-extra
+fields, and VeRL's reward loop must invoke `compute_audioenv_score` before a
+training reward exists.
 The pinned native-audio bridge retains stage-0 Thinker tokens/log-probabilities
 and the stage-2 Code2Wav waveform from the same vLLM-Omni request. It fails
 closed if either output is absent, preventing an unrelated TTS waveform from

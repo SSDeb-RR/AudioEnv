@@ -91,7 +91,7 @@ class VerlAgentLoopPayload:
     response_ids: tuple[int, ...]
     response_mask: tuple[int, ...]
     response_logprobs: tuple[float, ...]
-    reward_score: float
+    reward_score: float | None
     num_turns: int
     extra_fields: dict[str, Any]
 
@@ -128,7 +128,10 @@ def trajectory_to_verl_payload(trajectory: TrajectoryV2) -> VerlAgentLoopPayload
         response_ids=tuple(response_ids),
         response_mask=tuple(response_mask),
         response_logprobs=tuple(response_logprobs),
-        reward_score=trajectory.terminal_reward + trajectory.process_reward,
+        # VeRL must recompute this through compute_audioenv_score. If a score
+        # is returned here, its agent-loop batching creates rm_scores and the
+        # configured reward manager deliberately skips the custom scorer.
+        reward_score=None,
         num_turns=len(trajectory.turns),
         extra_fields={
             "audioenv_trusted_reward": {
@@ -137,6 +140,7 @@ def trajectory_to_verl_payload(trajectory: TrajectoryV2) -> VerlAgentLoopPayload
                 "reward_version": trajectory.reward_version,
                 "verifier_hash": trajectory.verifier_hash,
             },
+            "audioenv_verifier_hash": trajectory.verifier_hash,
             "audioenv_trajectory": trajectory.model_dump(mode="json"),
         },
     )
