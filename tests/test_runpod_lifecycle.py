@@ -2,12 +2,13 @@ from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from audioenv.contracts import GPUWorkerEventV1, GPUWorkerExperimentV1
-from audioenv.platform.api import create_app
+from audioenv.platform.api import _resolve_runpod_executor, create_app
 from audioenv.platform.runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
 
 
@@ -77,6 +78,35 @@ def test_runpod_transport_uses_canonical_v2_catalog_with_live_pod_capacity(monke
         "/v2/catalog/gpus?include=AVAILABILITY&product=POD&gpuCount=8&cloud=SECURE",
         None,
     )]
+
+
+def test_runpod_executor_resolves_v2_nested_direct_then_proxy_ssh(tmp_path, monkeypatch):
+    key = tmp_path / "id_ed25519"; key.write_text("reference only")
+    known = tmp_path / "known_hosts"; known.write_text("host key")
+    monkeypatch.setenv("RUNPOD_SSH_KEY", str(key))
+    monkeypatch.setenv("RUNPOD_KNOWN_HOSTS", str(known))
+    app = SimpleNamespace(state=SimpleNamespace(runpod_executor_factory=None))
+    config = RunPodConfig(
+        run_name="proof", image_digest="sha256:" + "a" * 64,
+    )
+    pod = {"ssh": {
+        "direct": {"host": "195.26.233.3", "port": 34446, "username": "root"},
+        "proxy": {"host": "ssh.runpod.io", "port": 22, "username": "pod-123"},
+    }}
+
+    executor = _resolve_runpod_executor(app, pod, config, {})
+
+    assert executor.host == "195.26.233.3"
+    assert executor.port == 34446
+    assert executor.user == "root"
+
+    proxy = _resolve_runpod_executor(app, {"ssh": {
+        "direct": None,
+        "proxy": {"host": "ssh.runpod.io", "port": 22, "username": "pod-123"},
+    }}, config, {})
+    assert proxy.host == "ssh.runpod.io"
+    assert proxy.port == 22
+    assert proxy.user == "pod-123"
 
 
 def experiment() -> GPUWorkerExperimentV1:

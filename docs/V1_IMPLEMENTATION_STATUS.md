@@ -389,6 +389,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   `maxCount.secure`, and `price.secure` fields. Provisioning sends only valid
   v2 create fields; maximum runtime and budget are enforced by AudioEnv's
   persisted watchdog because the v2 create schema has no `stopAfterSeconds`.
+  Reconnect recognizes the v2 `PROVISIONING`, `STARTING`, `RUNNING`, `EXITED`,
+  and `ERROR` states and resolves SSH from the nested `ssh.direct` or
+  `ssh.proxy` response before falling back to legacy flat fields.
   It also has a concrete
   strict-host-key SSH/SCP data plane for staging, detached worker launch,
   reconnectable event replay, safe-boundary cancellation, and hash-verified
@@ -423,7 +426,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-183 passed
+184 passed
 
 uv run audioenv validate
 389 passed, 0 failed

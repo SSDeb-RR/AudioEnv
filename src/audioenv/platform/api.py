@@ -1065,8 +1065,10 @@ def create_app(
             raise HTTPException(502, f"RunPod state refresh failed: {exc}") from exc
         remote_status = str(remote.get("status", remote.get("desiredStatus", "unknown"))).lower()
         mapped = {
-            "running": "provisioning", "stopped": "stopped", "exited": "stopped",
+            "running": "provisioning", "provisioning": "provisioning",
+            "starting": "provisioning", "stopped": "stopped", "exited": "stopped",
             "terminated": "stopped", "created": "provisioning", "pending": "provisioning",
+            "error": "failed",
         }.get(remote_status, resource.status)
         snapshot = json.loads(resource.config_json)
         if remote_status == "running" and "worker_launch" in snapshot:
@@ -1074,7 +1076,7 @@ def create_app(
         snapshot["last_remote_state"] = {
             key: remote[key] for key in (
                 "id", "status", "desiredStatus", "publicIp", "ssh_host", "sshHost",
-                "ssh_port", "sshPort",
+                "ssh_port", "sshPort", "ssh",
             ) if key in remote
         }
         resource = repository.update_compute_resource(resource.id, status=mapped, config=snapshot)
@@ -1664,14 +1666,29 @@ def _resolve_runpod_executor(app, pod: dict[str, Any], runpod_config, snapshot: 
     from .runpod import OpenSSHRemoteExecutor
     if app.state.runpod_executor_factory is not None:
         return app.state.runpod_executor_factory(pod, runpod_config)
-    host = pod.get("ssh_host", pod.get("sshHost", pod.get("publicIp")))
-    port = int(pod.get("ssh_port", pod.get("sshPort", 22)))
+    ssh = pod.get("ssh")
+    connection = None
+    if isinstance(ssh, dict):
+        for kind in ("direct", "proxy"):
+            candidate = ssh.get(kind)
+            if isinstance(candidate, dict) and candidate.get("host"):
+                connection = candidate
+                break
+    host = (
+        connection.get("host") if connection else
+        pod.get("ssh_host", pod.get("sshHost", pod.get("publicIp")))
+    )
+    port = int(
+        connection.get("port", 22) if connection else
+        pod.get("ssh_port", pod.get("sshPort", 22))
+    )
+    user = str(connection.get("username", "root")) if connection else "root"
     key_value = os.environ.get(runpod_config.ssh_key_secret_name)
     known_value = os.environ.get(snapshot.get("known_hosts_secret_name", "RUNPOD_KNOWN_HOSTS"))
     if not host or not key_value or not known_value:
         return None
     return OpenSSHRemoteExecutor(
-        host=str(host), port=port, key_path=Path(key_value),
+        host=str(host), port=port, user=user, key_path=Path(key_value),
         known_hosts_path=Path(known_value),
     )
 
