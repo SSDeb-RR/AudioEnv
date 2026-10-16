@@ -360,6 +360,25 @@ class PlatformRepository:
             record.authoring_status = "validated"
             record.content_hash = package["content_hash"]
             record.package_json = _dump(package)
+            existing = json.loads(record.validation_json) if record.validation_json else {}
+            if isinstance(existing, dict) and isinstance(existing.get("checks"), list):
+                existing["promotion"] = validation
+                existing["passed"] = True
+                existing.update({key: value for key, value in validation.items() if key != "checks"})
+                record.validation_json = _dump(existing)
+            else:
+                record.validation_json = _dump(validation)
+            session.add(record)
+            session.commit()
+            return record
+
+    def set_environment_validation(
+        self, environment_id: str, validation: dict[str, Any],
+    ) -> EnvironmentRecord:
+        with self.database.session() as session:
+            record = session.get(EnvironmentRecord, environment_id)
+            if record is None:
+                raise KeyError(environment_id)
             record.validation_json = _dump(validation)
             session.add(record)
             session.commit()

@@ -55,6 +55,9 @@ full-duplex streaming, or closed-model RL.
   capability and hardware preflight failures.
 - Pinned Repo2RLEnv-to-Harbor import in an isolated container, with protected
   verifier storage and automatic promotion only after every integrity gate.
+  A rootless-Docker Harbor validator runs fresh oracle, no-op, and explicit
+  adversarial trials without returning private verifier output; it fails
+  closed when that runtime or a required fixture is unavailable.
 - `TrajectoryV2`, a model-driven caller/agent rollout worker, and distinct
   VeRL-Omni v0.2 GSPO and GRPO Thinker-LoRA plugins. These paths are code-ready
   but remain GPU-unverified.

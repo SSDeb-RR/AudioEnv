@@ -24,7 +24,10 @@ from .db import Database, InvalidTransition, PlatformRepository, serialize_exper
 from ..artifacts import LocalArtifactStore
 from ..authoring import CustomTaskInput, DeterministicEnvironmentAuthor
 from ..evaluation import package_hashes
-from ..contracts import GPUExecutionPlanV1, GPUWorkerExperimentV1, PromotionEvidenceV1
+from ..contracts import (
+    EnvironmentPackageV1, GPUExecutionPlanV1, GPUWorkerExperimentV1,
+    PromotionEvidenceV1, SandboxPolicyV1,
+)
 from ..foundry import EnvironmentFoundry, ModelFoundry
 from ..harnesses import build_builtin_registry, resolve_compatibility
 from ..isolated_validation import IsolatedValidationError, IsolatedValidationRunner
@@ -132,6 +135,11 @@ class EnvironmentPromotionRequest(StrictRequest):
     confirmation_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class HarborValidationRequest(StrictRequest):
+    source_uri: str | None = Field(default=None, max_length=4_096)
+    policy: SandboxPolicyV1 = Field(default_factory=SandboxPolicyV1)
+
+
 class ModelFoundryRequest(StrictRequest):
     project_id: str | None = None
     model_id: str = Field(min_length=1, max_length=500)
@@ -151,6 +159,7 @@ def create_app(
     runpod_executor_factory: Callable[[dict[str, Any], Any], Any] | None = None,
     modal_transport: Any | None = None,
     local_cuda_provider: Any | None = None,
+    harbor_transport: Any | None = None,
 ) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
@@ -178,6 +187,7 @@ def create_app(
     app.state.runpod_executor_factory = runpod_executor_factory
     app.state.modal_transport = modal_transport
     app.state.local_cuda_provider = local_cuda_provider
+    app.state.harbor_transport = harbor_transport
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -483,6 +493,79 @@ def create_app(
         if row is None:
             raise HTTPException(404, "environment not found")
         return _environment(row, details=True)
+
+    @app.post("/api/environments/{environment_id:path}/validate-harbor", status_code=201)
+    def validate_harbor_environment(
+        environment_id: str, request: HarborValidationRequest,
+    ) -> dict[str, Any]:
+        row = repository.get_environment(environment_id)
+        if row is None:
+            raise HTTPException(404, "environment not found")
+        try:
+            package = EnvironmentPackageV1.model_validate_json(row.package_json)
+        except ValueError as exc:
+            raise HTTPException(422, f"invalid environment package: {exc}") from exc
+        if package.environment_type != "coding" or not (
+            package.id.startswith("harbor/") or package.id.startswith("repo2rlenv/")
+        ):
+            raise HTTPException(422, "environment is not an imported Harbor coding environment")
+        source_uri = request.source_uri or package.source.uri
+        try:
+            source, _revision = app.state.environment_foundry.materializer.materialize(source_uri)
+            root = source if source.is_dir() else source.parent
+            from ..adapters.harbor import HarborEnvironmentAdapter
+            from ..integrations.harbor_sandbox import DockerHarborTransport, HarborSandboxValidator
+            rebuilt, bundles = HarborEnvironmentAdapter(app.state.artifacts).convert(
+                root, environment_id=package.id, version=package.version,
+                source_uri=package.source.uri, revision=package.source.revision,
+            )
+            if rebuilt.content_hash != package.content_hash:
+                raise HTTPException(409, "Harbor source no longer matches the registered environment hash")
+            report = HarborSandboxValidator(
+                app.state.harbor_transport or DockerHarborTransport()
+            ).validate(
+                package, bundles, policy=request.policy,
+            )
+        except HTTPException:
+            raise
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            raise HTTPException(422, f"Harbor validation failed: {exc}") from exc
+        repository.set_environment_validation(environment_id, report)
+        stored = app.state.artifacts.put_json(report)
+        repository.add_artifact(
+            stored.id, experiment_id=None, project_id=row.project_id,
+            kind="environment-validation", media_type=stored.media_type,
+            size_bytes=stored.size_bytes, path=str(stored.path),
+            metadata={"environment_id": row.id, "environment_hash": row.content_hash},
+        )
+        verifier_payload = app.state.artifacts.get_bytes(package.protected_verifier.artifact_id)
+        verifier_hash = sha256(verifier_payload).hexdigest()
+        evidence = app.state.promotion_authority.issue(
+            environment_hash=row.content_hash,
+            verifier_hash_before=verifier_hash,
+            verifier_hash_after=verifier_hash,
+            validation=report,
+        )
+        evidence_artifact = app.state.artifacts.put_json(evidence.model_dump(mode="json"))
+        repository.add_artifact(
+            evidence_artifact.id, experiment_id=None, project_id=row.project_id,
+            kind="promotion-evidence", media_type=evidence_artifact.media_type,
+            size_bytes=evidence_artifact.size_bytes, path=str(evidence_artifact.path),
+            metadata={"environment_id": row.id, "environment_hash": row.content_hash,
+                      "worker_id": evidence.worker_id},
+        )
+        promotion = app.state.promotion_authority.verify(evidence)
+        promoted = None
+        if promotion.promoted:
+            final = promotion.model_copy(update={"evidence_artifact_id": evidence_artifact.id})
+            promoted = repository.promote_environment(environment_id, final.model_dump(mode="json"))
+        return {
+            "artifact_id": stored.id,
+            "evidence_artifact_id": evidence_artifact.id,
+            "validation": report,
+            "promotion": promotion.model_dump(mode="json"),
+            "environment": _environment(promoted, details=True) if promoted else None,
+        }
 
     @app.post("/api/environments/{environment_id:path}/sample")
     def sample_episode(environment_id: str) -> dict[str, Any]:

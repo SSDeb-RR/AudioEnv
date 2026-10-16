@@ -203,7 +203,7 @@ class EnvironmentFoundry:
                 environment_id=f"{boundary.id}@{boundary.version}",
             )
             return EnvironmentBuild(report, authored, candidate.model_dump(mode="json"))
-        harbor_manifest = _first_named(source, ("task.toml", "registry.json"))
+        harbor_manifest = _harbor_manifest(source)
         if harbor_manifest is not None:
             boundary, bundles = HarborEnvironmentAdapter(self.artifacts).convert(
                 root, environment_id=f"harbor/{root.name}", source_uri=source_uri, revision=revision,
@@ -359,6 +359,16 @@ def _first_named(source: Path, names: tuple[str, ...]) -> Path | None:
             if path.name in names and ".git" not in path.parts:
                 return path
     return None
+
+
+def _harbor_manifest(source: Path) -> Path | None:
+    direct = _first_named(source, ("task.toml", "registry.json"))
+    if direct is not None or not source.is_dir():
+        return direct
+    return next(
+        (path for path in sorted(source.glob("*/task.toml")) if ".git" not in path.parts),
+        None,
+    )
 
 
 def _looks_like_test(path: str) -> bool:

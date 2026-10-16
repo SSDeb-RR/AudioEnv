@@ -120,12 +120,24 @@ class HarborEnvironmentAdapter:
         instruction = (root / "instruction.md").read_text(encoding="utf-8")
         dockerfile = root / "environment" / "Dockerfile"
         verifier = root / "tests" / "test.sh"
-        solutions = tuple((root / "solution").glob("*")) if (root / "solution").is_dir() else ()
-        content = [
-            (root / "task.toml").read_bytes(), instruction.encode(),
-            dockerfile.read_bytes(), verifier.read_bytes(),
-        ]
-        content.extend(path.read_bytes() for path in sorted(solutions) if path.is_file())
+        solutions = tuple(
+            path for path in sorted((root / "solution").glob("*")) if path.is_file()
+        ) if (root / "solution").is_dir() else ()
+        content: list[bytes] = []
+        total_size = 0
+        task_entries = tuple(sorted(root.rglob("*")))
+        if any(path.is_symlink() for path in task_entries):
+            raise ValueError("Harbor task trees cannot contain symbolic links")
+        for path in (item for item in task_entries if item.is_file()):
+            if root not in path.resolve().parents:
+                raise ValueError(f"unsafe Harbor task file: {path.relative_to(root)}")
+            payload = path.read_bytes()
+            if len(payload) > 16 * 1024 * 1024:
+                raise ValueError(f"Harbor task file exceeds 16 MiB: {path.relative_to(root)}")
+            total_size += len(payload)
+            if total_size > 256 * 1024 * 1024:
+                raise ValueError("Harbor task exceeds 256 MiB")
+            content.extend((path.relative_to(root).as_posix().encode(), payload))
         return HarborTaskBundle(
             task_id=str(metadata.get("id") or root.name), root=root,
             instruction=instruction, dockerfile=dockerfile, verifier=verifier,

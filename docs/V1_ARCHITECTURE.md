@@ -72,6 +72,11 @@ and verifier-immutability gates all pass.
   authors may create draft data but cannot modify a trusted verifier.
 - Repository code is never executed on the host. Its environment remains
   unavailable until an OCI provider passes the sandbox capability check.
+  Imported Harbor bundles use a narrower `HarborSandboxValidator`: a rootless
+  Docker transport builds the declared image and runs reference, no-op, and
+  explicit adversarial fixtures in fresh network-off containers. Only hashes
+  and gate booleans leave the protected worker; verifier stdout/stderr and
+  solution contents do not. Missing fixtures or capabilities fail closed.
 - Secrets are referenced by name and never serialized into snapshots, traces,
   observations, or exports.
 

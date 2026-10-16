@@ -94,7 +94,11 @@ def aggregate_validation_checks(validation: dict[str, Any]) -> dict[str, bool]:
         values = [passed for name, passed in by_name.items() if name.endswith(suffix)]
         return bool(values or not required) and all(values)
 
-    build_names = [name for name in by_name if name == "tool_handlers_complete" or name.startswith("audio_profile:")]
+    build_names = [
+        name for name in by_name
+        if name == "tool_handlers_complete" or name.startswith("audio_profile:")
+        or name.endswith(":sandbox_build")
+    ]
     sandbox_build = bool(build_names) and all(by_name[name] for name in build_names)
     oracle = all_suffix(":oracle_pass")
     noop = all_suffix(":noop_fail")

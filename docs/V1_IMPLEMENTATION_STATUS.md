@@ -103,6 +103,15 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   Docker-dependent pipelines are rejected rather than mounting the host socket.
   Harbor instructions remain public
   while verifier paths and hashes are stored in a protected artifact.
+- Imported Harbor task collections now have a protected OCI validation worker
+  and product action. The worker requires rootless Docker, builds without
+  network by default, runs every oracle/no-op replay twice plus an explicit
+  adversarial fixture in fresh network-off, non-root, read-only containers,
+  hashes rather than returns private output, verifies state isolation and
+  source/verifier immutability, and automatically signs and promotes only when
+  all hard gates pass. Fake-container tests exercise the complete lifecycle;
+  this Mac has no rootless Docker runtime, so real untrusted-container
+  acceptance remains unrun and the endpoint fails closed here.
 - Environment promotion no longer accepts caller-supplied gate booleans. The
   backend aggregates persisted validator checks, hashes the protected verifier
   artifact, issues content-addressed HMAC-signed evidence with a locally held
@@ -193,9 +202,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   evidence only after a constrained subprocess independently reconstructs the
   environment and reproduces both its environment and verifier hashes. The
   worker uses a sanitized environment, bounded input and deadline, closed
-  descriptors, and host-supported POSIX resource limits. Harbor/repository
-  candidates still require an isolated OCI validation worker before they can
-  produce equivalent evidence.
+  descriptors, and host-supported POSIX resource limits. Harbor candidates
+  now produce equivalent signed evidence through the OCI worker when its
+  rootless-Docker capability and all protected gates pass.
 - `AudioEnvAgentLoop` validates policy version, masks, token/log-probability
   alignment, grouped rollouts, zero-variance rate, and VeRL-shaped V2 batch
   export. `AudioEnvVerlAgentLoop` now subclasses and registers against the
@@ -227,8 +236,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ## Missing / out of scope
 
-- Repository execution remains unavailable until an OCI sandbox passes the
-  specified network, privilege, filesystem, resource, socket, and secret tests.
+- Arbitrary repository execution remains unavailable. The implemented Harbor
+  validation path is intentionally narrower: it accepts a Harbor bundle with
+  a reference solution, protected verifier, and explicit adversarial fixture.
+  Real rootless-Docker acceptance remains outstanding on a compatible host.
 - Full duplex, interruption, telephony, Talker gradients, multi-tenancy,
   billing, Kubernetes, and additional cloud providers beyond RunPod and Modal
   are outside V1.
@@ -237,7 +248,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-129 passed
+136 passed
 
 uv run audioenv validate
 389 passed, 0 failed
