@@ -47,9 +47,10 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
     audio_artifacts: list[dict[str, str]] = []
     last_audio_hash = None
     last_mm_kwargs: dict[str, Any] = {}
+    last_audio_inputs: tuple[Any, ...] = ()
 
     async def generate(observation: PolicyObservation) -> PolicyTurn:
-        nonlocal last_audio_hash, last_mm_kwargs
+        nonlocal last_audio_hash, last_mm_kwargs, last_audio_inputs
         digest = sha256(observation.caller_audio).hexdigest()
         if digest != last_audio_hash:
             path = _write_audio(audio_dir, observation.caller_audio, "caller")
@@ -68,7 +69,12 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
                 observation.tool_schemas, sort_keys=True, separators=(",", ":"),
             )
         multimodal = await agent_loop.process_multi_modal_info(messages)
-        audios = multimodal.get("audios")
+        # VeRL's generic dataset helper extracts path strings. Qwen's processor
+        # requires decoded, 16 kHz waveforms, and trainer-side multimodal
+        # reconstruction must receive the exact same values as rollout.
+        audios = _load_qwen_audio_inputs(messages)
+        multimodal["audios"] = list(audios)
+        last_audio_inputs = audios
         mm_kwargs = agent_loop._get_mm_processor_kwargs(audios)
         last_mm_kwargs = dict(mm_kwargs)
         prompt_ids = await agent_loop.apply_chat_template(
@@ -136,7 +142,8 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         # Leave reward_score unset so VeRL invokes compute_audioenv_score and
         # validates the trusted payload against the immutable verifier hash.
         response_logprobs=logprobs, reward_score=None,
-        num_turns=len(result.steps), audio_paths=tuple(audio_paths),
+        num_turns=len(result.steps), audio_inputs=last_audio_inputs,
+        audio_paths=tuple(audio_paths),
         mm_processor_kwargs=last_mm_kwargs,
         extra_fields={
             "audioenv_trusted_reward": trusted,
@@ -178,6 +185,19 @@ def _write_audio(root: Path, payload: bytes, producer: str) -> Path:
     if not path.exists():
         path.write_bytes(payload)
     return path
+
+
+def _load_qwen_audio_inputs(messages: list[dict[str, Any]]) -> tuple[Any, ...]:
+    """Decode Qwen conversation audio using the model family's own utility."""
+
+    from qwen_omni_utils import process_audio_info
+
+    decoded = process_audio_info(messages, use_audio_in_video=False)
+    if not isinstance(decoded, list) or not decoded:
+        raise RuntimeError("Qwen audio preprocessing produced no waveform inputs")
+    if any(isinstance(item, (str, bytes, os.PathLike)) for item in decoded):
+        raise RuntimeError("Qwen audio preprocessing did not materialize waveform inputs")
+    return tuple(decoded)
 
 
 def _waveform_bytes(waveform: Any, sample_rate: int) -> bytes:

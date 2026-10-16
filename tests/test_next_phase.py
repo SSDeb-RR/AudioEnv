@@ -346,6 +346,7 @@ def test_native_verl_rollout_preserves_audio_for_processor_derived_positions():
     native = NativeVerlRollout(
         prompt_ids=(1, 2), response_ids=(3, 4, 5), response_mask=(1, 0, 1),
         response_logprobs=(-0.1, 0.0, -0.2), reward_score=1.0, num_turns=2,
+        audio_inputs=("decoded-a", "decoded-b"),
         audio_paths=("/immutable/caller-a.wav", "/immutable/caller-b.wav"),
         mm_processor_kwargs={"sampling_rate": 16_000},
         extra_fields={"audioenv_trusted_reward": {"terminal": 1.0}},
@@ -356,7 +357,7 @@ def test_native_verl_rollout_preserves_audio_for_processor_derived_positions():
 
     loop = AudioEnvVerlAgentLoop(rollout_factory=factory)
     output = asyncio.run(loop.run({"temperature": 1.0}))
-    assert output["multi_modal_data"] == {"audios": list(native.audio_paths)}
+    assert output["multi_modal_data"] == {"audios": list(native.audio_inputs)}
     assert output["mm_processor_kwargs"] == {"sampling_rate": 16_000}
     assert output["response_mask"] == [1, 0, 1]
     assert "position_ids" not in output

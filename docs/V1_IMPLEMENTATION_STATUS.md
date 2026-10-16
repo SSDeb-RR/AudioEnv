@@ -260,6 +260,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   closes the prior architectural gap where Thinker-only rollout could not
   produce natively bound agent audio; CUDA execution of the bridge remains a
   release gate.
+- The Qwen rollout now keeps two distinct audio representations: immutable WAV
+  paths for lineage and decoded/resampled waveform arrays for inference and
+  trainer-side feature reconstruction. The arrays are materialized through
+  Qwen's own audio utility and fail closed if preprocessing returns paths or no
+  audio, preventing the feature extractor from receiving filenames in place of
+  samples.
 - The frozen Qwen caller now has a loopback-only service boundary with one
   model resident on its assigned GPU set and isolated conversation state for
   every rollout. Private goals remain inside the service, responses return
@@ -409,7 +415,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-176 passed
+177 passed
 
 uv run audioenv validate
 389 passed, 0 failed

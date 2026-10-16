@@ -33,6 +33,9 @@ class NativeVerlRollout:
     # silently bypass the custom reward function.
     reward_score: float | None
     num_turns: int
+    # Decoded/resampled waveforms consumed by the Qwen processor. These are
+    # deliberately separate from immutable paths used for trace lineage.
+    audio_inputs: tuple[Any, ...]
     audio_paths: tuple[str, ...]
     mm_processor_kwargs: dict[str, Any] = field(default_factory=dict)
     extra_fields: dict[str, Any] = field(default_factory=dict)
@@ -46,8 +49,10 @@ class NativeVerlRollout:
             raise ValueError("native rollout log-probabilities are misaligned")
         if not any(self.response_mask):
             raise ValueError("native rollout requires trainable policy tokens")
-        if not self.audio_paths:
+        if not self.audio_inputs or not self.audio_paths:
             raise ValueError("native Qwen rollout requires caller audio")
+        if len(self.audio_inputs) != len(self.audio_paths):
+            raise ValueError("native rollout audio inputs and lineage paths are misaligned")
 
 
 def _runtime_factory() -> Callable[..., Any]:

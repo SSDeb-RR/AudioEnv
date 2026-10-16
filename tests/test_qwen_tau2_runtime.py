@@ -4,12 +4,17 @@ import asyncio
 import base64
 import io
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import wave
 
 import pytest
 
-from audioenv.training.qwen_tau2_runtime import _global_step, run_qwen_tau2_rollout
+from audioenv.training.qwen_tau2_runtime import (
+    _global_step,
+    _load_qwen_audio_inputs,
+    run_qwen_tau2_rollout,
+)
 
 
 def _wav(sample: bytes = b"\0\0") -> bytes:
@@ -140,6 +145,14 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
     monkeypatch.setenv("AUDIOENV_TAU2_CHECKOUT", str(tmp_path))
     monkeypatch.setenv("AUDIOENV_CALLER_URL", "http://127.0.0.1:8788")
     monkeypatch.setenv("AUDIOENV_ROLLOUT_AUDIO_DIR", str(tmp_path / "audio"))
+    decoded_inputs = (object(), object())
+    decode_calls = []
+    monkeypatch.setattr(
+        "audioenv.training.qwen_tau2_runtime._load_qwen_audio_inputs",
+        lambda messages: decode_calls.append(len(messages)) or decoded_inputs[: sum(
+            item.get("type") == "audio" for message in messages for item in message["content"]
+        )],
+    )
     monkeypatch.setattr(
         "audioenv.training.qwen_tau2_runtime.Tau2RetailSourceAdapter.open_worker",
         lambda _self, _checkout, timeout_seconds: tau2,
@@ -165,6 +178,8 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
     assert rollout.response_mask == (1, 0, 1, 0, 0, 0, 1)
     assert rollout.response_logprobs == pytest.approx((-0.1, 0.0, -0.2, 0.0, 0.0, 0.0, -0.3))
     assert len(rollout.audio_paths) == 2
+    assert rollout.audio_inputs == decoded_inputs
+    assert decode_calls == [2, 4, 6]
     assert rollout.mm_processor_kwargs == {"audio_count": 2}
     assert rollout.extra_fields["audioenv_trusted_reward"]["terminal"] == 1.0
     assert rollout.extra_fields["min_global_steps"] == 4
@@ -182,3 +197,22 @@ def test_qwen_tau2_runtime_rejects_missing_or_invalid_actor_step():
     for value in (None, True, -1, "4"):
         with pytest.raises(ValueError, match="global_steps"):
             _global_step({"global_steps": value})
+
+
+def test_qwen_audio_inputs_are_materialized_by_family_utility(monkeypatch):
+    waveform = object()
+    calls = []
+    monkeypatch.setitem(sys.modules, "qwen_omni_utils", SimpleNamespace(
+        process_audio_info=lambda messages, use_audio_in_video: (
+            calls.append((messages, use_audio_in_video)) or [waveform]
+        ),
+    ))
+    messages = [{"role": "user", "content": [{"type": "audio", "audio": "/caller.wav"}]}]
+    assert _load_qwen_audio_inputs(messages) == (waveform,)
+    assert calls == [(messages, False)]
+
+    monkeypatch.setitem(sys.modules, "qwen_omni_utils", SimpleNamespace(
+        process_audio_info=lambda *_args, **_kwargs: ["/still-a-path.wav"],
+    ))
+    with pytest.raises(RuntimeError, match="materialize waveform"):
+        _load_qwen_audio_inputs(messages)

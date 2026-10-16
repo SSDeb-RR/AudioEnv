@@ -207,7 +207,7 @@ class AudioEnvVerlAgentLoop(_VerlAgentLoopBase):
                 reward_score=trajectory.reward_score, num_turns=trajectory.num_turns,
                 extra_fields=trajectory.extra_fields,
             )
-            multi_modal_data = {"audios": list(trajectory.audio_paths)}
+            multi_modal_data = {"audios": list(trajectory.audio_inputs)}
             mm_processor_kwargs = trajectory.mm_processor_kwargs
         else:
             raise TypeError("AudioEnv VeRL rollout factory must return TrajectoryV2 or NativeVerlRollout")

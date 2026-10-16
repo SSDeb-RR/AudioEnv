@@ -94,6 +94,11 @@ being attached to a trainable action. The bridge reads the pinned
 mapping-based `MultimodalPayload`, unwraps Code2Wav's per-request
 `model_outputs`/`sr` values, and only then temporarily substitutes the retained
 Thinker request for VeRL token processing.
+Caller WAV paths remain immutable trace lineage, while the pinned Qwen audio
+utility decodes and resamples them into waveform arrays. Those exact arrays are
+used by both live rollout and VeRL's trainer-side multimodal reconstruction;
+path strings are never passed to the Qwen feature extractor as if they were
+waveforms.
 
 This correct launch and reward boundary does not by itself prove the complete
 multi-turn Qwen caller/agent loop. That remains a GPU acceptance item until the
