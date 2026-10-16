@@ -146,6 +146,9 @@ def _run_qwen(experiment: GPUWorkerExperimentV1, output: Path, events: EventWrit
         lora_rank=int(hp.get("lora_rank", 32)), lora_alpha=int(hp.get("lora_alpha", 64)),
         group_size=int(hp.get("group_size", 4)), max_steps=int(hp.get("max_steps", 1)),
         evaluation_interval=int(hp.get("evaluation_interval", 1)),
+        evaluation_temperature=float(hp.get("evaluation_temperature", 0.0)),
+        evaluation_top_p=float(hp.get("evaluation_top_p", 1.0)),
+        evaluation_top_k=int(hp.get("evaluation_top_k", -1)),
         resume_from=Path(experiment.resume_from) if experiment.resume_from else None,
     )
     estimate = trainer.preflight(config)
@@ -495,9 +498,9 @@ def _finalize_qwen_evaluations(
         caller_config={key: hp[key] for key in sorted(hp) if key.startswith("caller_")},
         audio_pipeline={key: hp[key] for key in sorted(hp) if key.startswith("audio_")},
         sampling={
-            "temperature": float(hp.get("evaluation_temperature", 0.0)),
-            "top_p": float(hp.get("evaluation_top_p", 1.0)),
-            "top_k": int(hp.get("evaluation_top_k", -1)),
+            "temperature": config.evaluation_temperature,
+            "top_p": config.evaluation_top_p,
+            "top_k": config.evaluation_top_k,
             "n": 1, "do_sample": False,
         },
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -35,6 +36,9 @@ class VerlOmniConfig:
     group_size: int = 4
     max_steps: int = 1
     evaluation_interval: int = 1
+    evaluation_temperature: float = 0.0
+    evaluation_top_p: float = 1.0
+    evaluation_top_k: int = -1
     resume_from: Path | None = None
 
     def online(self) -> OnlineRLTrainerConfigV1:
@@ -74,6 +78,12 @@ class _VerlOmniTrainer:
             errors.append("the release-certified path is single-node")
         if config.evaluation_interval < 1:
             errors.append("evaluation_interval must be positive")
+        if not math.isfinite(config.evaluation_temperature) or config.evaluation_temperature < 0:
+            errors.append("evaluation_temperature must be finite and non-negative")
+        if not math.isfinite(config.evaluation_top_p) or not 0 < config.evaluation_top_p <= 1:
+            errors.append("evaluation_top_p must be finite and in (0, 1]")
+        if config.evaluation_top_k < -1:
+            errors.append("evaluation_top_k must be -1 or non-negative")
         if not config.checkout.is_dir():
             errors.append("VeRL-Omni checkout does not exist")
         elif _git_revision(config.checkout) != PINNED_VERL_OMNI_COMMIT:
@@ -152,6 +162,11 @@ class _VerlOmniTrainer:
             "actor_rollout_ref.rollout.tensor_model_parallel_size=2",
             "actor_rollout_ref.rollout.calculate_log_probs=True",
             "actor_rollout_ref.rollout.enable_prefix_caching=False",
+            "actor_rollout_ref.rollout.val_kwargs.n=1",
+            "actor_rollout_ref.rollout.val_kwargs.do_sample=false",
+            f"actor_rollout_ref.rollout.val_kwargs.temperature={config.evaluation_temperature}",
+            f"actor_rollout_ref.rollout.val_kwargs.top_p={config.evaluation_top_p}",
+            f"actor_rollout_ref.rollout.val_kwargs.top_k={config.evaluation_top_k}",
             "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.output_mode=ar",
             "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe",
             "+actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_mode=full",
