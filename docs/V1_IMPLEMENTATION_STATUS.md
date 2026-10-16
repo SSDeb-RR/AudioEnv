@@ -92,6 +92,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   but truthfully reports `generated_needs_review` and remains unavailable.
   Caller and trainer choices in the run wizard are resolved from declared
   capabilities instead of a hard-coded menu.
+- Model registration now persists a separate `certified`, `conformant`,
+  `generated_needs_review`, or `rejected` state. A successful dependency probe
+  alone cannot mark a model usable; only the built-in certified local proof or
+  a complete conformance report can set `available=true`. Migration `0004`
+  backfills legacy databases, and the dashboard shows the actual registration
+  state rather than collapsing it into a boolean.
 - The executable Omni conformance contract now checks native-audio inference,
   structured actions, token/log-probability alignment, multimodal position
   channels, response masks, declared gradient scope, a real optimizer-state
@@ -248,7 +254,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-136 passed
+137 passed
 
 uv run audioenv validate
 389 passed, 0 failed

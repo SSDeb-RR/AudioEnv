@@ -42,6 +42,7 @@ class ModelRecord(Base):
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     probe_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     available: Mapped[bool] = mapped_column(Boolean, default=False)
+    registration_state: Mapped[str] = mapped_column(String, default="generated_needs_review")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -219,7 +220,10 @@ class Database:
         # Keep local startup self-healing; Alembic remains the authoritative
         # production migration record.
         additions = {
-            "models": {"project_id": "VARCHAR"},
+            "models": {
+                "project_id": "VARCHAR",
+                "registration_state": "VARCHAR DEFAULT 'generated_needs_review'",
+            },
             "environments": {"project_id": "VARCHAR"},
             "experiments": {
                 "project_id": "VARCHAR", "config_hash": "VARCHAR(64)", "preflight_json": "TEXT",
@@ -304,8 +308,10 @@ class PlatformRepository:
 
     def register_model(
         self, model_id: str, display_name: str, adapter_type: str, role: str, config: dict[str, Any],
-        project_id: str | None = None,
+        project_id: str | None = None, registration_state: str = "generated_needs_review",
     ) -> ModelRecord:
+        if registration_state not in {"certified", "conformant", "generated_needs_review", "rejected"}:
+            raise ValueError("invalid model registration state")
         record = ModelRecord(
             id=model_id,
             display_name=display_name,
@@ -313,7 +319,7 @@ class PlatformRepository:
             role=role,
             project_id=project_id or self.ensure_default_project().id,
             config_json=_dump(config),
-            available=False,
+            available=False, registration_state=registration_state,
         )
         with self.database.session() as session:
             session.merge(record)
@@ -334,7 +340,11 @@ class PlatformRepository:
             if row is None:
                 raise KeyError(model_id)
             row.probe_json = _dump(probe)
-            row.available = bool(probe.get("available"))
+            state = str(probe.get("registration_state") or row.registration_state)
+            if state not in {"certified", "conformant", "generated_needs_review", "rejected"}:
+                raise ValueError("invalid model registration state")
+            row.registration_state = state
+            row.available = bool(probe.get("available")) and state in {"certified", "conformant"}
             session.commit()
             return row
 

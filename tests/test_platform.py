@@ -80,10 +80,29 @@ def test_registered_model_stays_unavailable_until_probe_succeeds(tmp_path):
     })
     assert registered.status_code == 201
     assert registered.json()["available"] is False
+    assert registered.json()["registration_state"] == "generated_needs_review"
     probe = client.post("/api/models/probe", json={"model_id": model_id})
     assert probe.status_code == 200
     assert probe.json()["available"] is False
     assert probe.json()["probe"]["reasons"]
+
+
+def test_dependency_probe_cannot_bypass_model_conformance(tmp_path):
+    database = Database(f"sqlite:///{tmp_path / 'model-state.sqlite'}")
+    database.create_schema()
+    repository = PlatformRepository(database)
+    repository.register_model("lab/omni", "Omni", "custom", "agent", {})
+    pending = repository.set_model_probe("lab/omni", {
+        "available": True, "device": "cuda", "reasons": [],
+    })
+    assert pending.available is False
+    assert pending.registration_state == "generated_needs_review"
+    accepted = repository.set_model_probe("lab/omni", {
+        "available": True, "device": "cuda", "reasons": [],
+        "registration_state": "conformant",
+    })
+    assert accepted.available is True
+    assert accepted.registration_state == "conformant"
 
 
 def test_experiment_export_redacts_nested_secrets(tmp_path):

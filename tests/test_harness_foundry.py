@@ -193,3 +193,4 @@ def test_unknown_model_api_registers_downloadable_review_gated_sdk(tmp_path):
     model = app.state.repository.get_model("lab/novel-audio")
     assert model.available is False
     assert model.adapter_type == "generated-needs-review"
+    assert model.registration_state == "generated_needs_review"

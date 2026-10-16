@@ -362,7 +362,8 @@ def create_app(
         adapter_type = report.selected_driver.removeprefix("audioenv/") if report.selected_driver else "generated-needs-review"
         repository.register_model(
             request.model_id, request.model_id.rsplit("/", 1)[-1], adapter_type, request.role,
-            {"checkpoint": request.source, "onboarding": report.model_dump(mode="json")}, request.project_id,
+            {"checkpoint": request.source, "onboarding": report.model_dump(mode="json")},
+            request.project_id, report.registration_state,
         )
         _register_foundry_artifacts(
             repository, app.state.artifacts, report.generated_files,
@@ -465,6 +466,7 @@ def create_app(
         )
         probe = adapter.probe().model_dump(mode="json")
         probe["available"] = report.registered
+        probe["registration_state"] = report.registration_state
         probe["conformance"] = report.model_dump(mode="json")
         repository.set_model_probe(model_id, probe)
         return report.model_dump(mode="json")
@@ -1202,18 +1204,23 @@ def _seed_builtin_records(repository: PlatformRepository) -> None:
     if repository.get_model(model_id) is None:
         repository.register_model(
             model_id, "Small Audio Tool Policy", "small-audio-tool-policy", "agent",
-            {"claim_scope": "audio_conditioned_platform_proof"},
+            {"claim_scope": "audio_conditioned_platform_proof"}, registration_state="certified",
         )
         estimate = TinyAudioPolicyTrainer(package).preflight(TinyTrainerConfig(steps=1))
         repository.set_model_probe(model_id, {
             "available": estimate.available, "device": "cpu", "revision": "builtin-v2",
             "reasons": list(estimate.reasons), "capabilities": builtin_capabilities,
+            "registration_state": "certified",
         })
     else:
         existing = repository.get_model(model_id)
         probe = json.loads(existing.probe_json) if existing and existing.probe_json else {}
-        if "capabilities" not in probe:
-            probe["capabilities"] = builtin_capabilities
+        if "capabilities" not in probe or existing.registration_state != "certified":
+            probe.update({
+                "capabilities": builtin_capabilities,
+                "registration_state": "certified",
+                "available": bool(probe.get("available", True)),
+            })
             repository.set_model_probe(model_id, probe)
 
 
@@ -1792,6 +1799,7 @@ def _model(row) -> dict[str, Any]:
     return {
         "id": row.id, "project_id": row.project_id, "display_name": row.display_name,
         "adapter_type": row.adapter_type, "role": row.role, "available": row.available,
+        "registration_state": row.registration_state,
         "probe": json.loads(row.probe_json) if row.probe_json else None,
         "config": json.loads(row.config_json),
     }

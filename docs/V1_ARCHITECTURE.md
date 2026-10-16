@@ -107,9 +107,11 @@ EnvHarness is an optional, pinned integration rather than a core dependency.
 ## Native-audio rollout and training boundary
 
 `OmniModelDriver` is the architecture-family boundary. Qwen3-Omni is the
-certified reference implementation; generated drivers cannot register before
+designated reference family but remains `generated_needs_review` or `rejected`
+until the real GPU conformance run passes; generated drivers cannot register before
 native-audio, structured-action, alignment, gradient, update, and reload
-conformance passes. Caller and agent histories are isolated.
+conformance passes. Dependency accessibility is recorded separately and never
+promotes a driver. Caller and agent histories are isolated.
 
 The model-driven runner emits `TrajectoryV2`, binding audio hashes,
 multimodal spans, prompt/generated tokens, response masks, rollout
