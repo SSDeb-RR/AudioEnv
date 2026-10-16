@@ -13,7 +13,13 @@ from uuid import uuid4
 
 from ..adapters.tau2 import Tau2RetailSourceAdapter
 from ..platform.caller_service import FrozenCallerHTTPClient
-from .tau2_episode import PolicyObservation, PolicyTurn, Tau2NativeEpisodeController, parse_episode_action
+from .tau2_episode import (
+    PolicyBudgetExhausted,
+    PolicyObservation,
+    PolicyTurn,
+    Tau2NativeEpisodeController,
+    parse_episode_action,
+)
 from .verl_runtime import NativeVerlRollout
 
 
@@ -52,6 +58,7 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
     last_mm_kwargs: dict[str, Any] = {}
     last_audio_inputs: tuple[Any, ...] = ()
     previous_audio_count = 0
+    response_budget = _response_budget(agent_loop)
 
     async def generate(observation: PolicyObservation) -> PolicyTurn:
         nonlocal initial_prompt_ids, last_mm_kwargs, last_audio_inputs, previous_audio_count
@@ -102,15 +109,26 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
             response_logprobs.extend([0.0] * len(observation_ids))
             prompt_ids = tuple(sequence_ids)
         previous_audio_count = len(audios)
+        remaining = response_budget - len(response_ids)
+        if remaining <= 0:
+            raise PolicyBudgetExhausted("VeRL response token budget is exhausted")
+        turn_sampling = {**sampling_params, "logprobs": 0}
+        configured_max = turn_sampling.get("max_tokens")
+        if isinstance(configured_max, int) and not isinstance(configured_max, bool):
+            turn_sampling["max_tokens"] = min(configured_max, remaining)
+        else:
+            turn_sampling["max_tokens"] = remaining
         output = await agent_loop.server_manager.generate(
             request_id=uuid4().hex, prompt_ids=prompt_ids,
-            sampling_params={**sampling_params, "logprobs": 0},
+            sampling_params=turn_sampling,
             audio_data=audios, mm_processor_kwargs=mm_kwargs,
         )
         if not output.token_ids or output.log_probs is None:
             raise RuntimeError("Qwen rollout did not return policy tokens and log-probabilities")
         if len(output.token_ids) != len(output.log_probs):
             raise RuntimeError("Qwen rollout token/log-probability alignment failed")
+        if len(output.token_ids) > remaining:
+            raise RuntimeError("Qwen rollout exceeded the declared VeRL response token budget")
         semantic = agent_loop.tokenizer.decode(output.token_ids, skip_special_tokens=True).strip()
         native = output.extra_fields.get("audioenv_native_audio")
         if not output.extra_fields.get("audioenv_native_audio_bound") or native is None:
@@ -257,6 +275,16 @@ def _global_step(sample: dict[str, Any]) -> int:
     value = sample.get("global_steps")
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("rollout sample requires a non-negative integer global_steps")
+    return value
+
+
+def _response_budget(agent_loop: Any) -> int:
+    rollout_config = getattr(agent_loop, "rollout_config", None)
+    value = getattr(rollout_config, "response_length", None)
+    if isinstance(rollout_config, dict):
+        value = rollout_config.get("response_length")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("AudioEnv VeRL agent loop requires a positive response_length budget")
     return value
 
 

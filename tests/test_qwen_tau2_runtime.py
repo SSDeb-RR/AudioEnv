@@ -112,10 +112,11 @@ class _Server:
 
 
 class _AgentLoop:
-    def __init__(self):
+    def __init__(self, response_length=64):
         self.server_manager = _Server()
         self.tokenizer = _Tokenizer()
         self.index = 0
+        self.rollout_config = SimpleNamespace(response_length=response_length)
 
     async def process_multi_modal_info(self, messages):
         return {"audios": [
@@ -201,6 +202,45 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
     assert draft["dataset_policy_version"] == "policy-1"
     assert "private_details" not in repr(draft)
     assert tau2.tools == [("tau-session", "lookup_order", {"order_id": "A"})]
+    assert caller.deleted == ["caller-session"]
+
+
+def test_qwen_tau2_runtime_truncates_before_veRL_can_silently_clip_response(
+    tmp_path: Path, monkeypatch,
+):
+    tau2 = _Tau2()
+    monkeypatch.setenv("AUDIOENV_TAU2_CHECKOUT", str(tmp_path))
+    monkeypatch.setenv("AUDIOENV_CALLER_URL", "http://127.0.0.1:8788")
+    monkeypatch.setenv("AUDIOENV_ROLLOUT_AUDIO_DIR", str(tmp_path / "audio"))
+    monkeypatch.setattr(
+        "audioenv.training.qwen_tau2_runtime._load_qwen_audio_inputs",
+        lambda messages: tuple(object() for message in messages for item in message["content"] if item.get("type") == "audio"),
+    )
+    monkeypatch.setattr(
+        "audioenv.training.qwen_tau2_runtime.Tau2RetailSourceAdapter.open_worker",
+        lambda _self, _checkout, timeout_seconds: tau2,
+    )
+    caller = _Caller("")
+    monkeypatch.setattr(
+        "audioenv.training.qwen_tau2_runtime.FrozenCallerHTTPClient", lambda _url: caller,
+    )
+    agent_loop = _AgentLoop(response_length=2)
+
+    rollout = asyncio.run(run_qwen_tau2_rollout(
+        agent_loop=agent_loop,
+        sampling_params={"temperature": 0.8, "max_tokens": 32},
+        sample={
+            "task_id": "retail-1", "experiment_id": "exp-1",
+            "environment_hash": "a" * 64, "verifier_hash": "b" * 64,
+            "policy_version": "policy-1", "checkpoint_id": "base",
+            "model_id": "qwen", "seed": 17, "max_turns": 5, "global_steps": 4,
+        },
+    ))
+
+    assert rollout.extra_fields["audioenv_rollout_draft"]["truncated"] is True
+    assert rollout.extra_fields["audioenv_rollout_draft"]["truncation_reason"] == "response_length"
+    assert len(rollout.response_ids) == 2
+    assert len(agent_loop.server_manager.prompts) == 1
     assert caller.deleted == ["caller-session"]
 
 

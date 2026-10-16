@@ -417,7 +417,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-180 passed
+181 passed
 
 uv run audioenv validate
 389 passed, 0 failed

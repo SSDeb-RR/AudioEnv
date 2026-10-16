@@ -74,6 +74,10 @@ class Tau2EpisodeResult:
 PolicyGenerate = Callable[[PolicyObservation], PolicyTurn | Awaitable[PolicyTurn]]
 
 
+class PolicyBudgetExhausted(RuntimeError):
+    """The trainer sequence budget cannot hold another policy turn."""
+
+
 class Tau2NativeEpisodeController:
     """Run one protected multi-turn episode through explicit service ports."""
 
@@ -109,8 +113,12 @@ class Tau2NativeEpisodeController:
         failed_actions: set[str] = set()
         try:
             for index in range(1, self.max_turns + 1):
-                produced = generate(PolicyObservation(caller_audio, tool_result, index, tool_schemas))
-                turn = await produced if hasattr(produced, "__await__") else produced
+                try:
+                    produced = generate(PolicyObservation(caller_audio, tool_result, index, tool_schemas))
+                    turn = await produced if hasattr(produced, "__await__") else produced
+                except PolicyBudgetExhausted:
+                    reason = "response_length"
+                    break
                 if not isinstance(turn, PolicyTurn):
                     raise TypeError("policy generator must return PolicyTurn")
                 try:
