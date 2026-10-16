@@ -528,7 +528,7 @@ def test_verl_v1_queue_worker_finalizes_before_batch_insertion(tmp_path: Path, m
 class _RunPodTransport:
     def __init__(self): self.created = []; self.stopped = []
     def list_gpu_types(self):
-        return [{"id": "H100", "memory_gb": 80, "secure_cloud_available": 8, "price_per_gpu_hour": 2.0}]
+        return [{"id": "H100", "memory": 80, "maxCount": {"secure": 8}, "price": {"secure": 2.0}}]
     def create_pod(self, payload): self.created.append(payload); return {"id": "pod-1"}
     def get_pod(self, pod_id): return {"id": pod_id, "status": "RUNNING"}
     def stop_pod(self, pod_id): self.stopped.append(pod_id); return {"id": pod_id, "status": "STOPPED"}
@@ -555,4 +555,5 @@ def test_gpu_plans_are_guarded_and_never_provision_without_exact_confirmation(tm
     assert transport.created == []
     provider.provision(config, quote, confirmation_name="paid-proof")
     assert transport.created[0]["cloud"] == "SECURE"
-    assert transport.created[0]["gpu"] == {"id": "H100", "count": 8, "minRamPerGpu": 80}
+    assert transport.created[0]["gpu"] == {"id": "H100", "count": 8}
+    assert "stopAfterSeconds" not in transport.created[0]

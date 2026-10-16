@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from audioenv.contracts import GPUWorkerEventV1, GPUWorkerExperimentV1
 from audioenv.platform.api import create_app
-from audioenv.platform.runpod import RunPodConfig, RunPodSecureCloudProvider
+from audioenv.platform.runpod import RunPodConfig, RunPodRESTV2Transport, RunPodSecureCloudProvider
 
 
 class FakeTransport:
@@ -18,8 +18,8 @@ class FakeTransport:
 
     def list_gpu_types(self):
         return [{
-            "id": "H100-80GB", "memory_gb": 80,
-            "secure_cloud_available": 8, "price_per_gpu_hour": 2.0,
+            "id": "H100-80GB", "memory": 80,
+            "maxCount": {"secure": 8}, "price": {"secure": 2.0},
         }]
 
     def create_pod(self, payload):
@@ -60,6 +60,23 @@ class FakeRemote:
 
     def download(self, remote_path, local_path):
         local_path.write_bytes(self.files[remote_path])
+
+
+def test_runpod_transport_uses_canonical_v2_catalog_with_live_pod_capacity(monkeypatch):
+    transport = RunPodRESTV2Transport()
+    calls = []
+    monkeypatch.setattr(
+        transport, "_request",
+        lambda method, path, payload=None: calls.append((method, path, payload)) or {"gpus": []},
+    )
+
+    assert transport.base_url == "https://api.runpod.io"
+    assert transport.list_gpu_types() == []
+    assert calls == [(
+        "GET",
+        "/v2/catalog/gpus?include=AVAILABILITY&product=POD&gpuCount=8&cloud=SECURE",
+        None,
+    )]
 
 
 def experiment() -> GPUWorkerExperimentV1:
@@ -306,8 +323,8 @@ def test_runpod_launch_rejects_changed_quote_before_provisioning(tmp_path):
         "max_runtime_hours": 2, "max_total_budget_usd": 100,
     }).json()
     transport.list_gpu_types = lambda: [{
-        "id": "H100-80GB", "memory_gb": 80, "secure_cloud_available": 8,
-        "price_per_gpu_hour": 2.5,
+        "id": "H100-80GB", "memory": 80, "maxCount": {"secure": 8},
+        "price": {"secure": 2.5},
     }]
     response = client.post(f"/api/experiments/{experiment['id']}/launch", json={
         "confirmed": True, "provider": "runpod-secure-cloud", "quote_id": quote["id"],

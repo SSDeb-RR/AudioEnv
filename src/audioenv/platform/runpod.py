@@ -145,11 +145,15 @@ class OpenSSHRemoteExecutor:
 class RunPodRESTV2Transport:
     """Credential-lazy REST transport; secret values are never serialized."""
 
-    def __init__(self, *, api_key_env: str = "RUNPOD_API_KEY", base_url: str = "https://rest.runpod.io"):
+    def __init__(self, *, api_key_env: str = "RUNPOD_API_KEY", base_url: str = "https://api.runpod.io"):
         self.api_key_env, self.base_url = api_key_env, base_url.rstrip("/")
 
     def list_gpu_types(self) -> list[dict[str, Any]]:
-        payload = self._request("GET", "/v2/catalog/gpus")
+        # V2 only includes live Pod stock when both include and product are
+        # supplied. AudioEnv's certified topology is eight Secure Cloud GPUs.
+        payload = self._request(
+            "GET", "/v2/catalog/gpus?include=AVAILABILITY&product=POD&gpuCount=8&cloud=SECURE",
+        )
         return list(payload if isinstance(payload, list) else payload.get("gpus", []))
 
     def create_pod(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -216,8 +220,8 @@ class RunPodSecureCloudProvider:
             raise ValueError("V1 GPU gate requires exactly 8 GPUs with at least 80 GB each")
         eligible = [
             item for item in self.transport.list_gpu_types()
-            if int(item.get("memory_gb", item.get("memoryInGb", 0))) >= config.gpu_memory_gb
-            and int(item.get("secure_cloud_available", item.get("secureCloudAvailable", 0))) >= config.gpu_count
+            if _gpu_memory_gb(item) >= config.gpu_memory_gb
+            and _secure_capacity(item) >= config.gpu_count
         ]
         if not eligible:
             return RunPodQuote("unavailable", config.gpu_count, 0.0, 0.0, False)
@@ -237,9 +241,7 @@ class RunPodSecureCloudProvider:
             "cloud": "SECURE",
             "startSsh": True,
             "ports": ["22/tcp"],
-            "stopAfterSeconds": int(config.max_runtime_hours * 3600),
-            "gpu": {"id": quote.gpu_type_id, "count": quote.gpu_count,
-                    "minRamPerGpu": config.gpu_memory_gb},
+            "gpu": {"id": quote.gpu_type_id, "count": quote.gpu_count},
             "disk": 200,
             **({"mounts": {"network": [{
                 "volumeId": config.network_volume_id, "path": "/runpod-volume",
@@ -391,12 +393,26 @@ class RunPodSecureCloudProvider:
 
 
 def _gpu_price(item: dict[str, Any]) -> float:
-    value = item.get("price_per_gpu_hour")
+    price = item.get("price")
+    value = price.get("secure") if isinstance(price, dict) else None
+    # Retain the legacy aliases only for injected transports while the live
+    # REST transport is bound to the official V2 response above.
     if value is None:
-        value = item.get("pricePerGpuHour")
+        value = item.get("price_per_gpu_hour", item.get("pricePerGpuHour"))
     if value is None:
         raise ValueError("GPU catalog item lacks an hourly price")
     return float(value)
+
+
+def _gpu_memory_gb(item: dict[str, Any]) -> int:
+    return int(item.get("memory", item.get("memory_gb", item.get("memoryInGb", 0))))
+
+
+def _secure_capacity(item: dict[str, Any]) -> int:
+    maximum = item.get("maxCount")
+    if isinstance(maximum, dict):
+        return int(maximum.get("secure", 0))
+    return int(item.get("secure_cloud_available", item.get("secureCloudAvailable", 0)))
 
 
 def _safe_run_id(value: str) -> str:

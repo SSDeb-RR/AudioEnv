@@ -383,7 +383,13 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   fake Docker and also reject wheel-version drift. A local image ID is not
   misrepresented as a pushed registry digest; both the real CUDA build and
   registry publication remain external gates.
-- RunPod has REST v2 quote/provision/state/stop methods plus a concrete
+- RunPod has REST v2 quote/provision/state/stop methods bound to the current
+  canonical `https://api.runpod.io/v2` contract. Catalog requests explicitly
+  request Secure Pod availability for eight GPUs and parse v2 `memory`,
+  `maxCount.secure`, and `price.secure` fields. Provisioning sends only valid
+  v2 create fields; maximum runtime and budget are enforced by AudioEnv's
+  persisted watchdog because the v2 create schema has no `stopAfterSeconds`.
+  It also has a concrete
   strict-host-key SSH/SCP data plane for staging, detached worker launch,
   reconnectable event replay, safe-boundary cancellation, and hash-verified
   artifact collection. These paths are locally transport-tested; the live API,
@@ -417,7 +423,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-182 passed
+183 passed
 
 uv run audioenv validate
 389 passed, 0 failed

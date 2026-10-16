@@ -69,7 +69,7 @@ def test_native_v2_trace_normalizes_without_private_training_tensors():
 
 class FakeRunPod:
     def __init__(self): self.stopped = []
-    def list_gpu_types(self): return [{"id":"H100-80","memory_gb":80,"secure_cloud_available":8,"price_per_gpu_hour":2.0}]
+    def list_gpu_types(self): return [{"id":"H100-80","memory":80,"maxCount":{"secure":8},"price":{"secure":2.0}}]
     def create_pod(self, payload): return {"id":"pod-1","payload":payload}
     def get_pod(self, pod_id): return {"id":pod_id,"status":"RUNNING"}
     def stop_pod(self, pod_id): self.stopped.append(pod_id); return {"id":pod_id,"status":"STOPPED"}
