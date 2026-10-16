@@ -189,11 +189,14 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   but fail when the separately allocated caller started.
 - Checkpoint resume is now a product workflow rather than a hidden trainer
   option. The API creates an immutable lineage-bound child run after verifying
-  the checkpoint artifact hash; the dashboard resumes a local run, preflights
-  it, explicitly launches it, and shows continued step numbering. GPU resume
+  the checkpoint artifact hash; GPU children additionally require matching
+  successful worker reload evidence. The dashboard resumes a local run,
+  preflights it, explicitly launches it, and shows continued step numbering. GPU resume
   drafts resolve preserved `global_step_*` directories and RunPod fails closed
   without its original persistent volume. Provider preparation rejects a
-  different local workspace, RunPod network volume, or Modal volume.
+  different local workspace, RunPod network volume, or Modal volume. The run
+  detail UI carries those GPU drafts through fresh configuration validation,
+  provider review, and exact-name confirmation before it permits relaunch.
 - The GPU run wizard now emits VeRL's actual `max_steps` setting. The previous
   generic `steps` field could be ignored and silently fall back to one step.
 - GPU checkpoint files collected through local CUDA, RunPod, or Modal now bind

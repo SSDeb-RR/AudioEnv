@@ -881,6 +881,14 @@ def create_app(
 
         config = json.loads(source.config_json)
         provider_id = str(config.get("provider_id", "local-subprocess"))
+        artifact_metadata = json.loads(artifact.metadata_json)
+        if provider_id != "local-subprocess" and not (
+            artifact_metadata.get("verification_source") == "gpu-worker-checkpoint-reload"
+            and artifact_metadata.get("checkpoint_reload_verified") is True
+        ):
+            raise HTTPException(
+                409, "GPU resume requires successful persisted checkpoint reload evidence",
+            )
         hyperparameters = dict(config.get("hyperparameters") or config.get("trainer_config") or {})
         if provider_id == "local-subprocess":
             hyperparameters.update({"steps": request.additional_steps, "resume_from": str(checkpoint)})

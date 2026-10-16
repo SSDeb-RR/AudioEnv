@@ -90,8 +90,11 @@ full-duplex streaming, or closed-model RL.
 - Terminal local runs can resume from a content-hash-verified checkpoint in the
   dashboard. Resume creates a new immutable child experiment with explicit
   parent/checkpoint lineage before preflight and explicit relaunch. GPU resume
-  drafts resolve only preserved managed checkpoint directories and are bound
-  to the original local workspace, RunPod network volume, or Modal volume.
+  additionally requires successful worker reload evidence, resolves only
+  preserved managed checkpoint directories, and is bound
+  to the original local workspace, RunPod network volume, or Modal volume. The
+  dashboard keeps GPU resumes as reviewable drafts, requires a fresh provider
+  preflight/quote, and repeats exact-name launch confirmation.
 - Checkpoint verification is backend-aware: local policy checkpoints are
   actually loaded, while GPU artifacts require a matching persisted worker
   reload event and a valid content hash. Missing or mismatched evidence fails

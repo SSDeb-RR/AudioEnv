@@ -141,6 +141,9 @@ def test_resumed_runpod_quote_rejects_a_different_volume_before_provisioning(tmp
         kind="checkpoint", media_type=stored.media_type, size_bytes=stored.size_bytes,
         path=str(stored.path), metadata={
             "remote_relative_path": "global_step_4/adapter/model.safetensors",
+            "verification_source": "gpu-worker-checkpoint-reload",
+            "checkpoint_reload_verified": True,
+            "checkpoint_directory": "global_step_4",
         },
     )
     repository.create_compute_resource(
@@ -153,13 +156,36 @@ def test_resumed_runpod_quote_rejects_a_different_volume_before_provisioning(tmp
         "additional_steps": 1,
     })
     assert resumed.status_code == 201
-    response = client.post(f"/api/experiments/{resumed.json()['id']}/runpod/quote", json={
+    resumed_run = resumed.json()
+    assert resumed_run["status"] == "draft"
+    assert resumed_run["config"]["hyperparameters"]["max_steps"] == 1
+    assert resumed_run["config"]["gpu_worker"]["resume_from"].endswith("/global_step_4")
+    assert resumed_run["config"]["resume_storage"]["provider_id"] == "runpod-secure-cloud"
+    assert resumed_run["config"]["resume_storage"]["storage_id"] == "original-volume"
+    assert resumed_run["config"]["resume_storage"]["source_resource_id"]
+    response = client.post(f"/api/experiments/{resumed_run['id']}/runpod/quote", json={
         "image": "registry/audioenv:v1", "image_digest": "sha256:" + "a" * 64,
         "max_runtime_hours": 1, "max_total_budget_usd": 10,
         "network_volume_id": "different-volume",
     })
     assert response.status_code == 409
     assert "original persisted storage" in response.text
+
+    unverified = app.state.artifacts.put_bytes(
+        b"unverified checkpoint", media_type="application/octet-stream",
+    )
+    repository.add_artifact(
+        unverified.id, experiment_id=source.id, project_id=source.project_id,
+        kind="checkpoint", media_type=unverified.media_type,
+        size_bytes=unverified.size_bytes, path=str(unverified.path),
+        metadata={"remote_relative_path": "global_step_5/adapter/model.safetensors"},
+    )
+    rejected = client.post(f"/api/experiments/{source.id}/resume", json={
+        "checkpoint_artifact_id": unverified.id, "run_name": "unsafe resume",
+        "additional_steps": 1,
+    })
+    assert rejected.status_code == 409
+    assert "successful persisted checkpoint reload evidence" in rejected.text
 
 
 def test_api_uses_persisted_records(tmp_path):
