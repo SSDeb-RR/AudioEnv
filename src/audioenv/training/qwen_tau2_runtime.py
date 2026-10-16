@@ -24,7 +24,11 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
     experiment_id = _sample_string(sample, "experiment_id")
     verifier_hash = _hex_hash(sample, "verifier_hash")
     environment_hash = _hex_hash(sample, "environment_hash")
-    policy_version = _sample_string(sample, "policy_version")
+    dataset_policy_version = _sample_string(sample, "policy_version")
+    global_step = _global_step(sample)
+    # The dataset value identifies the policy lineage; VeRL's global step is
+    # the synchronized rollout-weight version for this online update.
+    policy_version = f"{dataset_policy_version}@verl-step-{global_step}"
     seed = int(sample.get("seed", 0))
     checkout = Path(_environment("AUDIOENV_TAU2_CHECKOUT")).resolve()
     caller = FrozenCallerHTTPClient(_environment("AUDIOENV_CALLER_URL"))
@@ -113,6 +117,8 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
         "experiment_id": experiment_id, "environment_hash": environment_hash,
         "verifier_hash": verifier_hash, "task_id": task_id, "seed": seed,
         "policy_version": policy_version, "truncated": result.truncated,
+        "dataset_policy_version": dataset_policy_version,
+        "verl_global_step": global_step,
         "truncation_reason": result.truncation_reason,
         "episode_id": uuid4().hex,
         "model_id": str(sample.get("model_id", "Qwen/Qwen3-Omni-30B-A3B-Instruct")),
@@ -136,6 +142,11 @@ async def run_qwen_tau2_rollout(*, agent_loop, sampling_params, sample: dict[str
             "audioenv_trusted_reward": trusted,
             "audioenv_verifier_hash": verifier_hash,
             "audioenv_rollout_draft": public_trace,
+            # Pinned VeRL V1 consumes these fields for trajectory-span and
+            # off-policy staleness accounting. This synchronous rollout uses
+            # one actor version for the complete episode.
+            "min_global_steps": global_step,
+            "max_global_steps": global_step,
         },
     )
 
@@ -192,6 +203,13 @@ def _hex_hash(sample: dict[str, Any], key: str) -> str:
     value = _sample_string(sample, key)
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError(f"rollout sample {key} must be a lowercase sha256")
+    return value
+
+
+def _global_step(sample: dict[str, Any]) -> int:
+    value = sample.get("global_steps")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("rollout sample requires a non-negative integer global_steps")
     return value
 
 

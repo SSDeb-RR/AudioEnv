@@ -9,7 +9,7 @@ import wave
 
 import pytest
 
-from audioenv.training.qwen_tau2_runtime import run_qwen_tau2_rollout
+from audioenv.training.qwen_tau2_runtime import _global_step, run_qwen_tau2_rollout
 
 
 def _wav(sample: bytes = b"\0\0") -> bytes:
@@ -157,6 +157,7 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
             "environment_hash": "a" * 64, "verifier_hash": "b" * 64,
             "policy_version": "policy-1", "checkpoint_id": "base",
             "model_id": "qwen", "seed": 17, "max_turns": 5,
+            "global_steps": 4,
         },
     ))
     assert rollout.reward_score is None
@@ -166,8 +167,18 @@ def test_qwen_tau2_runtime_executes_native_multiturn_tool_and_reward_path(
     assert len(rollout.audio_paths) == 2
     assert rollout.mm_processor_kwargs == {"audio_count": 2}
     assert rollout.extra_fields["audioenv_trusted_reward"]["terminal"] == 1.0
+    assert rollout.extra_fields["min_global_steps"] == 4
+    assert rollout.extra_fields["max_global_steps"] == 4
     draft = rollout.extra_fields["audioenv_rollout_draft"]
     assert draft["terminal_reward"] == 1.0 and not draft["truncated"]
+    assert draft["policy_version"] == "policy-1@verl-step-4"
+    assert draft["dataset_policy_version"] == "policy-1"
     assert "private_details" not in repr(draft)
     assert tau2.tools == [("tau-session", "lookup_order", {"order_id": "A"})]
     assert caller.deleted == ["caller-session"]
+
+
+def test_qwen_tau2_runtime_rejects_missing_or_invalid_actor_step():
+    for value in (None, True, -1, "4"):
+        with pytest.raises(ValueError, match="global_steps"):
+            _global_step({"global_steps": value})

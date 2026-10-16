@@ -334,6 +334,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   observation, terminal speech, official reward, mask-zero observation tokens,
   and caller cleanup. Model and service boundaries are faked; CUDA acceptance
   is still required for the real checkpoint.
+- The Qwen rollout now consumes the actual `global_steps` value supplied by
+  pinned VeRL V1, combines it with the immutable dataset policy lineage, and
+  emits equal minimum/maximum actor-step bounds. This supplies VeRL's required
+  staleness metadata and prevents online trajectories from retaining a false
+  static base-policy version after optimizer updates.
 - The immutable GPU image now runs `audioenv-verl-contract-check` after
   installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
   output fields, async postprocessor hook, `audioenv_agent` registration,
@@ -387,7 +392,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-172 passed
+173 passed
 
 uv run audioenv validate
 389 passed, 0 failed

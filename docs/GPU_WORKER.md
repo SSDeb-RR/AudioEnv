@@ -77,6 +77,12 @@ patches during the build: native Thinker/Talker output binding, trajectory
 postprocessing, LoRA-gradient auditing, and rollout/training log-probability
 parity. An upstream method move or inactive patch therefore fails the image
 build before GPU provisioning.
+Each rollout binds its dataset policy lineage to VeRL's required
+`global_steps`, producing an exact `@verl-step-N` policy version plus equal
+`min_global_steps` and `max_global_steps` fields. The pinned V1 trainer uses
+those bounds for trajectory-span and off-policy-staleness accounting; missing
+or invalid step metadata is rejected instead of silently assigning every
+optimizer batch to the base-policy label.
 The pinned native-audio bridge retains stage-0 Thinker tokens/log-probabilities
 and the stage-2 Code2Wav waveform from the same vLLM-Omni request. It fails
 closed if either output is absent, preventing an unrelated TTS waveform from
