@@ -56,6 +56,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   no metric rather than a fabricated zero. The run page shows persisted GPU
   telemetry with its metric name and source, and labels unreported utilization,
   memory, throughput, and measured cost as unavailable.
+- Run details expose the persisted preflight, gradient-scope, parameter-change,
+  log-probability, checkpoint-reload, and evaluation event payloads as training
+  integrity evidence. The model registry likewise exposes the stored probe and
+  conformance report rather than reducing it to an availability badge.
 - The VeRL postprocessor now persists each validated native `TrajectoryV2` to
   a per-process JSONL file only after Qwen processor positions and audio spans
   are bound. Local CUDA, RunPod, and Modal artifact import classify these files
@@ -346,7 +350,7 @@ uv run audioenv validate
 
 cd web && npm run build && npm run test:e2e
 Vite production build passed
-5 Playwright product-flow tests passed
+6 Playwright product-flow tests passed
 
 uv build
 audioenv_foundry-0.5.0 wheel and sdist built

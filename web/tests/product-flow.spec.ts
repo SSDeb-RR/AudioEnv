@@ -55,6 +55,23 @@ test("analyze repository and onboard an Omni model through the foundry", async (
   await expect(modelBuild.getByText(/native-audio generation/)).toBeVisible();
 });
 
+test("show persisted model probe and conformance evidence", async ({ page, request }) => {
+  const modelId = `probe-evidence-${Date.now()}`;
+  const registered = await request.post("/api/models", { data: {
+    id: modelId, display_name: "Probe evidence Omni", adapter_type: "qwen3-omni",
+    role: "agent", config: { checkpoint: "/missing/qwen-checkpoint" },
+  }});
+  expect(registered.ok()).toBeTruthy();
+
+  await page.goto("/models");
+  const row = page.locator(".grid-list > div").filter({ hasText: "Probe evidence Omni" });
+  await row.getByRole("button", { name: "Dependency probe" }).click();
+  await expect(row.getByText("Probe and conformance evidence")).toBeVisible();
+  await row.getByText("Probe and conformance evidence").click();
+  await expect(row.locator("pre")).toContainText("available");
+  await expect(row.locator("pre")).toContainText("reasons");
+});
+
 test("configure the guarded RunPod quote workflow without provisioning", async ({ page, request }) => {
   const modelId = `playwright-qwen-${Date.now()}`;
   const registered = await request.post("/api/models", { data: {
