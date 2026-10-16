@@ -1131,16 +1131,7 @@ def create_app(
                 for path in provider.collect_artifacts(
                     executor, experiment_id=experiment_id, destination=incoming,
                 ):
-                    payload = path.read_bytes()
-                    media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
-                    stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
-                    kind = _gpu_artifact_kind(path)
-                    row = repository.add_artifact(
-                        stored.id, experiment_id=experiment_id, project_id=record.project_id,
-                        kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
-                        path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
-                    )
-                    artifacts.append(row.id)
+                    artifacts.append(_store_gpu_artifact(app, repository, record, path, incoming))
                 _advance_gpu_terminal(repository, experiment_id, "completed")
                 provider.cleanup(resource.external_id)
                 resource = repository.update_compute_resource(resource.id, status="stopped", config=snapshot)
@@ -1374,10 +1365,31 @@ def create_app(
         row = repository.get_artifact(artifact_id)
         if row is None or row.experiment_id != experiment_id or row.kind != "checkpoint":
             raise HTTPException(404, "checkpoint not found")
+        checkpoint = Path(row.path).resolve()
+        if not checkpoint.is_file() or app.state.data_root not in checkpoint.parents:
+            return {"verified": False, "artifact_id": artifact_id,
+                    "reason": "checkpoint artifact is unavailable"}
+        if sha256(checkpoint.read_bytes()).hexdigest() != row.id:
+            return {"verified": False, "artifact_id": artifact_id,
+                    "reason": "checkpoint artifact failed content-hash verification"}
+        metadata = json.loads(row.metadata_json)
+        if (metadata.get("verification_source") == "gpu-worker-checkpoint-reload"
+                and metadata.get("checkpoint_reload_verified") is True):
+            result = {
+                "verified": True,
+                "artifact_id": artifact_id,
+                "source": metadata["verification_source"],
+                "checkpoint_directory": metadata.get("checkpoint_directory"),
+                "checkpoint_tree_sha256": metadata.get("checkpoint_tree_sha256"),
+            }
+            if metadata.get("step") is not None:
+                result["step"] = int(metadata["step"])
+            return result
         try:
-            model, payload = TinyAudioPolicyTrainer(build_reference_package()).load_checkpoint(Path(row.path))
+            model, payload = TinyAudioPolicyTrainer(build_reference_package()).load_checkpoint(checkpoint)
             del model
-            return {"verified": True, "artifact_id": artifact_id, "step": int(payload["step"])}
+            return {"verified": True, "artifact_id": artifact_id, "step": int(payload["step"]),
+                    "source": "tiny-audio-policy-checkpoint-reload"}
         except Exception as exc:
             return {"verified": False, "artifact_id": artifact_id, "reason": str(exc)}
 
@@ -1901,20 +1913,60 @@ def _store_gpu_artifact(app, repository: PlatformRepository, record, path: Path,
     media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
     stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
     kind = _gpu_artifact_kind(path)
+    relative = str(path.relative_to(incoming))
+    metadata: dict[str, Any] = {"remote_relative_path": relative}
+    if kind == "checkpoint":
+        metadata.update(_gpu_checkpoint_evidence(repository, record.id, relative))
     row = repository.add_artifact(
         stored.id, experiment_id=record.id, project_id=record.project_id,
         kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
-        path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
+        path=str(stored.path), metadata=metadata,
     )
     return row.id
 
 
 def _gpu_artifact_kind(path: Path) -> str:
-    if "checkpoint" in path.parts or "adapter" in path.name:
+    if ("checkpoint" in path.parts or "adapter" in path.name
+            or any(part.startswith("global_step_") for part in path.parts)):
         return "checkpoint"
     if "trajectories" in path.parts and path.name.startswith("trajectory-") and path.suffix == ".jsonl":
         return "training_trajectories"
     return "gpu_run_artifact"
+
+
+def _gpu_checkpoint_evidence(
+    repository: PlatformRepository, experiment_id: str, relative_path: str,
+) -> dict[str, Any]:
+    """Bind a collected file to the worker event that proved directory reload."""
+
+    relative = Path(relative_path)
+    checkpoint_directory = next(
+        (part for part in relative.parts if part.startswith("global_step_")), None,
+    )
+    if checkpoint_directory is None:
+        return {}
+    for log in reversed(repository.list_logs(experiment_id)):
+        if log.message != "checkpoint.saved":
+            continue
+        payload = json.loads(log.payload_json)
+        event_directory = next(
+            (part for part in Path(str(payload.get("path", ""))).parts
+             if part.startswith("global_step_")), None,
+        )
+        if event_directory != checkpoint_directory or payload.get("reload_verified") is not True:
+            continue
+        evidence: dict[str, Any] = {
+            "checkpoint_reload_verified": True,
+            "checkpoint_tree_sha256": payload.get("sha256"),
+            "checkpoint_directory": checkpoint_directory,
+            "verification_source": "gpu-worker-checkpoint-reload",
+            "gpu_event_sequence": payload.get("gpu_event_sequence"),
+        }
+        match = re.fullmatch(r"global_step_(\d+)", checkpoint_directory)
+        if match:
+            evidence["step"] = int(match.group(1))
+        return evidence
+    return {}
 
 
 def _remote_resume_checkpoint(
@@ -2100,16 +2152,7 @@ def _sync_modal_resource(app, repository: PlatformRepository, record, resource) 
         if terminal and terminal.type == "worker.completed":
             incoming = app.state.data_root / "incoming" / resource.id
             for path in provider.collect_artifacts(config, experiment_id=record.id, destination=incoming):
-                payload = path.read_bytes()
-                media_type = "application/json" if path.suffix in {".json", ".jsonl"} else "application/octet-stream"
-                stored = app.state.artifacts.put_bytes(payload, media_type=media_type)
-                kind = _gpu_artifact_kind(path)
-                row = repository.add_artifact(
-                    stored.id, experiment_id=record.id, project_id=record.project_id,
-                    kind=kind, media_type=media_type, size_bytes=stored.size_bytes,
-                    path=str(stored.path), metadata={"remote_relative_path": str(path.relative_to(incoming))},
-                )
-                artifacts.append(row.id)
+                artifacts.append(_store_gpu_artifact(app, repository, record, path, incoming))
             _advance_gpu_terminal(repository, record.id, "completed")
             provider.cancel(resource.external_id)
             resource = repository.update_compute_resource(resource.id, status="stopped", config=snapshot)

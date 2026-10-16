@@ -7,7 +7,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from audioenv.platform.api import (
-    _enforce_resume_storage, _remote_resume_checkpoint, _resume_storage_binding, create_app,
+    _enforce_resume_storage, _remote_resume_checkpoint, _resume_storage_binding,
+    _store_gpu_artifact, create_app,
 )
 from audioenv.platform.db import (
     Database,
@@ -62,6 +63,66 @@ def test_gpu_resume_lineage_requires_preserved_checkpoint_directory(tmp_path):
         _enforce_resume_storage(
             {"resume_storage": binding}, "runpod-secure-cloud", "different-volume",
         )
+
+
+def test_gpu_checkpoint_verification_uses_matching_worker_reload_evidence(tmp_path):
+    app = create_app(f"sqlite:///{tmp_path / 'gpu-checkpoint.sqlite'}")
+    repository = app.state.repository
+    experiment = repository.create_experiment("gpu", {"provider_id": "local-cuda"})
+    repository.add_log(experiment.id, "checkpoint.saved", payload={
+        "gpu_event_sequence": 19,
+        "path": f"/workspace/runs/{experiment.id}/output/global_step_4",
+        "sha256": "tree-digest",
+        "reload_verified": True,
+    })
+    incoming = app.state.data_root / "incoming" / "resource-1"
+    checkpoint = incoming / "global_step_4" / "adapter" / "model.safetensors"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"gpu adapter shard")
+
+    artifact_id = _store_gpu_artifact(app, repository, experiment, checkpoint, incoming)
+    artifact = repository.get_artifact(artifact_id)
+    metadata = json.loads(artifact.metadata_json)
+    assert metadata["verification_source"] == "gpu-worker-checkpoint-reload"
+    assert metadata["checkpoint_tree_sha256"] == "tree-digest"
+    assert metadata["step"] == 4
+
+    response = TestClient(app).post(
+        f"/api/experiments/{experiment.id}/checkpoints/{artifact_id}/verify",
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "verified": True,
+        "artifact_id": artifact_id,
+        "source": "gpu-worker-checkpoint-reload",
+        "checkpoint_directory": "global_step_4",
+        "checkpoint_tree_sha256": "tree-digest",
+        "step": 4,
+    }
+
+
+def test_gpu_checkpoint_verification_fails_closed_without_matching_reload_evidence(tmp_path):
+    app = create_app(f"sqlite:///{tmp_path / 'unverified-gpu-checkpoint.sqlite'}")
+    repository = app.state.repository
+    experiment = repository.create_experiment("gpu", {"provider_id": "local-cuda"})
+    repository.add_log(experiment.id, "checkpoint.saved", payload={
+        "path": f"/workspace/runs/{experiment.id}/output/global_step_3",
+        "sha256": "different-tree",
+        "reload_verified": True,
+    })
+    incoming = app.state.data_root / "incoming" / "resource-2"
+    checkpoint = incoming / "global_step_4" / "adapter" / "model.safetensors"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"not a tiny checkpoint")
+
+    artifact_id = _store_gpu_artifact(app, repository, experiment, checkpoint, incoming)
+    metadata = json.loads(repository.get_artifact(artifact_id).metadata_json)
+    assert "verification_source" not in metadata
+    response = TestClient(app).post(
+        f"/api/experiments/{experiment.id}/checkpoints/{artifact_id}/verify",
+    )
+    assert response.status_code == 200
+    assert response.json()["verified"] is False
 
 
 def test_resumed_runpod_quote_rejects_a_different_volume_before_provisioning(tmp_path):

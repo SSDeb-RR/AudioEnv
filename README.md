@@ -92,6 +92,10 @@ full-duplex streaming, or closed-model RL.
   parent/checkpoint lineage before preflight and explicit relaunch. GPU resume
   drafts resolve only preserved managed checkpoint directories and are bound
   to the original local workspace, RunPod network volume, or Modal volume.
+- Checkpoint verification is backend-aware: local policy checkpoints are
+  actually loaded, while GPU artifacts require a matching persisted worker
+  reload event and a valid content hash. Missing or mismatched evidence fails
+  closed instead of sending a VeRL adapter through the tiny-policy loader.
 - An executable pinned-VeRL API audit that verifies agent-loop registration,
   rollout fields, protected reward loading, and reward-manager registration
   while building or attesting the GPU worker runtime.

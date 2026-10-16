@@ -196,6 +196,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   different local workspace, RunPod network volume, or Modal volume.
 - The GPU run wizard now emits VeRL's actual `max_steps` setting. The previous
   generic `steps` field could be ignored and silently fall back to one step.
+- GPU checkpoint files collected through local CUDA, RunPod, or Modal now bind
+  to a matching persisted `checkpoint.saved` event only when the worker's
+  post-training reload evaluation succeeded. The verification endpoint checks
+  each file's content hash and presents the worker reload provenance; artifacts
+  without matching evidence fail closed. Local tiny-policy checkpoints retain
+  their independent load-and-deserialize verification path.
 - The VeRL agent loop no longer supplies a precomputed reward score, which
   would cause upstream batching to bypass the configured scorer. Protected
   terminal/process results and the immutable verifier hash now flow through
@@ -324,7 +330,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-162 passed
+164 passed
 
 uv run audioenv validate
 389 passed, 0 failed
