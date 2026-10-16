@@ -100,6 +100,8 @@ def _nonzero(tensor: Any) -> bool:
 
 
 def _parameter_hash(module: Any) -> str:
+    import torch
+
     digest = sha256()
     found = False
     for name, parameter in sorted(module.named_parameters()):
@@ -111,7 +113,12 @@ def _parameter_hash(module: Any) -> str:
             value = value.to_local()
         value = value.cpu().contiguous()
         digest.update(name.encode()); digest.update(b"\0")
-        digest.update(value.numpy().tobytes())
+        digest.update(str(value.dtype).encode()); digest.update(b"\0")
+        digest.update(str(tuple(value.shape)).encode()); digest.update(b"\0")
+        # NumPy cannot represent torch.bfloat16. Hash the exact underlying
+        # bytes through a uint8 view so the release-configured dtype works and
+        # no lossy cast can hide a parameter update.
+        digest.update(value.view(torch.uint8).numpy().tobytes())
     if not found:
         raise RuntimeError("AudioEnv gradient audit found no trainable parameters")
     return digest.hexdigest()

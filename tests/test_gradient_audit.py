@@ -53,3 +53,22 @@ def test_gradient_audit_fails_on_undeclared_trainable_parameter(tmp_path: Path, 
         engine.optimizer_step()
     with pytest.raises(ValueError, match="outside Thinker LoRA"):
         validate_gradient_evidence(tmp_path)
+
+
+def test_gradient_audit_hashes_release_bfloat16_parameters(tmp_path: Path, monkeypatch):
+    class BFloat16Module(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.q_proj_lora_A = torch.nn.Parameter(
+                torch.tensor([1.0], dtype=torch.bfloat16),
+            )
+
+    class BFloat16Engine(_Engine):
+        pass
+
+    monkeypatch.setenv("AUDIOENV_GRADIENT_EVIDENCE_DIR", str(tmp_path))
+    install_gradient_audit(BFloat16Engine)
+    engine = BFloat16Engine(BFloat16Module())
+    (engine.module.q_proj_lora_A.square().sum()).backward()
+    engine.optimizer_step()
+    assert validate_gradient_evidence(tmp_path, expected_ranks=1)["all_steps_changed"]

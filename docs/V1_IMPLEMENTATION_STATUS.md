@@ -344,6 +344,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   emits equal minimum/maximum actor-step bounds. This supplies VeRL's required
   staleness metadata and prevents online trajectories from retaining a false
   static base-policy version after optimizer updates.
+- LoRA parameter-change evidence now hashes dtype- and shape-bound raw tensor
+  bytes. This directly supports the configured `bfloat16` Qwen parameters;
+  the previous `.numpy()` path was valid for local float32 fixtures but would
+  fail on PyTorch bfloat16 before producing GPU acceptance evidence.
 - The immutable GPU image now runs `audioenv-verl-contract-check` after
   installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
   output fields, async postprocessor hook, `audioenv_agent` registration,
@@ -397,7 +401,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-174 passed
+175 passed
 
 uv run audioenv validate
 389 passed, 0 failed

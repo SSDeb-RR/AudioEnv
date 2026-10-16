@@ -47,6 +47,9 @@ calculation, the controller compares rollout token log-probabilities with the
 actor's recomputed values on response-mask tokens and rejects non-finite values
 or drift above `logprob_max_abs_error` (default `0.05`). Both summaries are
 content-hashed reproducibility artifacts.
+Parameter hashes operate on dtype- and shape-bound raw tensor bytes, including
+the release-configured `bfloat16`; they do not depend on NumPy representing the
+training dtype or cast parameters to a lossy intermediary.
 
 The local CPU proof backend is executable on development machines. The
 `qwen3-omni-verl` backend performs two fail-closed preflights. Runtime
