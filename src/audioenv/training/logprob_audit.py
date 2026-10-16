@@ -30,20 +30,21 @@ def assess_logprob_parity(rollout, recomputed, response_mask, *, tolerance: floa
     }
 
 
-def install_logprob_audit(trainer_class=None) -> bool:
+def install_logprob_audit(trainer_class=None, *, queue_module=None) -> bool:
     if trainer_class is None:
         from verl.trainer.ppo.v1.trainer_base import PPOTrainer
         trainer_class = PPOTrainer
     if getattr(trainer_class, "_audioenv_logprob_audit", False):
         return False
     original = trainer_class._compute_old_log_prob
+    if queue_module is None:
+        from verl.trainer.ppo.v1 import trainer_base as queue_module
 
     @wraps(original)
     def compute_old_log_prob(self, batch, metrics):
         result = original(self, batch, metrics)
-        from verl.trainer.ppo.v1 import trainer_base as trainer_module
         fields = ["rollout_log_probs", "old_log_probs", "response_mask"]
-        nested = trainer_module.tq.kv_batch_get(
+        nested = queue_module.tq.kv_batch_get(
             keys=batch.keys, partition_id=batch.partition_id, select_fields=fields,
         )
         data = nested.to_padded_tensor()

@@ -348,6 +348,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   bytes. This directly supports the configured `bfloat16` Qwen parameters;
   the previous `.numpy()` path was valid for local float32 fixtures but would
   fail on PyTorch bfloat16 before producing GPU acceptance evidence.
+- The log-probability audit is now exercised at the exact pinned VeRL V1
+  `_compute_old_log_prob(batch, metrics)` boundary, including TransferQueue
+  retrieval of rollout, recomputed old-policy, and response-mask tensors plus
+  persisted step evidence. This complements the tensor-math tests with proof
+  that the runtime wrapper calls the expected V1 surface.
 - The immutable GPU image now runs `audioenv-verl-contract-check` after
   installing the pinned VeRL/VeRL-Omni packages. It verifies the exact agent
   output fields, async postprocessor hook, `audioenv_agent` registration,
@@ -401,7 +406,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-175 passed
+176 passed
 
 uv run audioenv validate
 389 passed, 0 failed
