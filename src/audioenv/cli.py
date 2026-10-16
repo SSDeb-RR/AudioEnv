@@ -168,7 +168,13 @@ def main(argv: list[str] | None = None) -> int:
         if not (static_dir / "index.html").is_file():
             raise RuntimeError("bundled dashboard is missing; run 'npm run build' in web/")
         print(f"AudioEnv: http://{args.host}:{args.port} (recovered jobs: {recovered})")
-        uvicorn.run(create_app(database_url, static_dir=static_dir), host=args.host, port=args.port)
+        uvicorn.run(
+            create_app(
+                database_url, static_dir=static_dir,
+                external_resource_poll_interval_seconds=5.0,
+            ),
+            host=args.host, port=args.port,
+        )
         return 0
     if args.command == "dev":
         try:

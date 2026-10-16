@@ -393,7 +393,10 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   provisioning timestamp, attempts the worker cancellation sentinel, stops the
   Pod when either limit is reached, and records a cancelled experiment and
   compute resource. Legacy resource records without a reviewed quote remain
-  readable but cannot retroactively reconstruct a trustworthy spend limit.
+  readable but cannot retroactively reconstruct a trustworthy spend limit. The
+  production `audioenv app` process also supervises active external resources
+  every five seconds, so reconnect, event ingestion, and limit enforcement do
+  not depend on an open dashboard or a user pressing Sync.
   Reconnect recognizes the v2 `PROVISIONING`, `STARTING`, `RUNNING`, `EXITED`,
   and `ERROR` states and resolves SSH from the nested `ssh.direct` or
   `ssh.proxy` response before falling back to legacy flat fields.
@@ -433,7 +436,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-184 passed
+185 passed
 
 uv run audioenv validate
 389 passed, 0 failed

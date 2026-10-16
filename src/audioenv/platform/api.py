@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -180,6 +181,7 @@ def create_app(
     model_conformance_transport: Any | None = None,
     model_conformance_image_builder: Any | None = None,
     trusted_model_conformance_images: tuple[str, ...] | None = None,
+    external_resource_poll_interval_seconds: float | None = None,
 ) -> FastAPI:
     resolved_url = database_url or os.environ.get("AUDIOENV_DATABASE_URL", "sqlite:///./.audioenv/audioenv.db")
     database = Database(resolved_url)
@@ -221,6 +223,9 @@ def create_app(
     app.state.modal_transport = modal_transport
     app.state.local_cuda_provider = local_cuda_provider
     app.state.harbor_transport = harbor_transport
+    app.state.external_resource_poll_interval_seconds = external_resource_poll_interval_seconds
+    app.state.external_resource_watchdog_task = None
+    app.state.external_resource_watchdog_errors = {}
     _seed_builtin_records(repository)
     app.add_middleware(
         CORSMiddleware,
@@ -1490,6 +1495,53 @@ def create_app(
                 await asyncio.sleep(1)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    async def supervise_external_resources() -> None:
+        interval = app.state.external_resource_poll_interval_seconds
+        if interval is None or interval <= 0:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            resources = repository.list_active_compute_resources()
+
+            async def supervise(resource) -> None:
+                try:
+                    if resource.provider == "runpod-secure-cloud" and resource.status == "provisioning":
+                        await asyncio.to_thread(
+                            reconcile_compute_resource, resource.experiment_id, resource.id,
+                        )
+                        resource = repository.get_compute_resource(resource.id)
+                        if resource is None or resource.status != "running":
+                            return
+                    await asyncio.to_thread(
+                        sync_compute_resource, resource.experiment_id, resource.id,
+                    )
+                    app.state.external_resource_watchdog_errors.pop(resource.id, None)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # A transient provider error must not disable supervision of other jobs.
+                    app.state.external_resource_watchdog_errors[resource.id] = str(exc)
+
+            await asyncio.gather(*(supervise(resource) for resource in resources))
+
+    async def start_external_resource_watchdog() -> None:
+        interval = app.state.external_resource_poll_interval_seconds
+        if interval is not None and interval > 0:
+            app.state.external_resource_watchdog_task = asyncio.create_task(
+                supervise_external_resources(), name="audioenv-external-resource-watchdog",
+            )
+
+    async def stop_external_resource_watchdog() -> None:
+        task = app.state.external_resource_watchdog_task
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            app.state.external_resource_watchdog_task = None
+
+    app.router.add_event_handler("startup", start_external_resource_watchdog)
+    app.router.add_event_handler("shutdown", stop_external_resource_watchdog)
 
     if static_dir is not None and static_dir.is_dir():
         assets = static_dir / "assets"

@@ -589,6 +589,16 @@ class PlatformRepository:
                 ExternalComputeResourceRecord.experiment_id == experiment_id
             ).order_by(ExternalComputeResourceRecord.created_at.desc())))
 
+    def list_active_compute_resources(self) -> list[ExternalComputeResourceRecord]:
+        """Return resources which still require control-plane supervision."""
+        with self.database.session() as session:
+            return list(session.scalars(
+                select(ExternalComputeResourceRecord).where(
+                    ExternalComputeResourceRecord.external_id.is_not(None),
+                    ExternalComputeResourceRecord.status.in_(("provisioning", "running")),
+                ).order_by(ExternalComputeResourceRecord.created_at)
+            ))
+
     def update_compute_resource(
         self, resource_id: str, *, status: str, external_id: str | None = None,
         config: dict[str, Any] | None = None,

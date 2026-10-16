@@ -2,6 +2,7 @@ from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -430,3 +431,54 @@ def test_runpod_terminal_sync_collects_artifacts_completes_and_stops_compute(tmp
     assert artifacts[0]["kind"] == "checkpoint"
     assert client.get(artifacts[0]["download_url"]).content == checkpoint
     assert transport.stopped == ["pod-1"]
+
+
+def test_control_plane_watchdog_stops_expired_runpod_without_browser_sync(tmp_path):
+    transport = FakeTransport()
+    remote = FakeRemote()
+    app = create_app(
+        f"sqlite:///{tmp_path / 'watchdog.sqlite'}",
+        runpod_transport=transport,
+        runpod_executor_factory=lambda _pod, _config: remote,
+        external_resource_poll_interval_seconds=0.01,
+    )
+    repository = app.state.repository
+    run = repository.create_experiment("Unattended GPU run", {"provider_id": "runpod-secure-cloud"})
+    repository.transition(run.id, "validating")
+    repository.transition(run.id, "queued")
+    bundle = GPUWorkerExperimentV1(
+        experiment_id=run.id, run_name=run.name, backend="tiny-cpu-proof",
+        trainer="audioenv/small-audio-reinforce", algorithm="reinforce",
+        output_dir=f"/workspace/runs/{run.id}/output",
+        cancellation_file=f"/workspace/runs/{run.id}/cancel.requested",
+    )
+    config = RunPodConfig(
+        run_name=run.name, image_digest="sha256:" + "d" * 64,
+        max_runtime_hours=1, max_total_budget_usd=20,
+    )
+    resource = repository.create_compute_resource(
+        experiment_id=run.id, provider="runpod-secure-cloud", status="running",
+        external_id="pod-watchdog", config={
+            "config": asdict(config),
+            "quote": {
+                "gpu_type_id": "H100-80GB", "gpu_count": 8,
+                "hourly_price_usd": 16, "maximum_cost_usd": 16,
+                "available": True,
+            },
+            "worker_experiment": bundle.model_dump(mode="json"),
+            "worker_launch": {"experiment_path": f"/workspace/runs/{run.id}/experiment.json"},
+            "provisioned_at": "2000-01-01T00:00:00+00:00",
+        },
+    )
+
+    with TestClient(app):
+        deadline = time.monotonic() + 2
+        while repository.get_compute_resource(resource.id).status != "cancelled":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert app.state.external_resource_watchdog_task is not None
+
+    assert app.state.external_resource_watchdog_task is None
+    assert repository.get_experiment(run.id).status == "cancelled"
+    assert transport.stopped == ["pod-watchdog"]
+    assert f"/workspace/runs/{run.id}/cancel.requested" in remote.files
