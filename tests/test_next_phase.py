@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import wave
 
 import pytest
@@ -449,16 +450,73 @@ def test_verl_finalizer_binds_later_caller_audio_in_masked_response(tmp_path: Pa
 
 
 def test_verl_trajectory_finalize_bridge_really_installs_once():
-    class Manager:
+    class Worker:
         async def _agent_loop_postprocess(self, output, validate, **kwargs):
             del output, validate, kwargs
             return object()
 
-    original = Manager._agent_loop_postprocess
-    assert install_trajectory_finalize_bridge(Manager)
-    assert Manager._audioenv_trajectory_bridge is True
-    assert Manager._agent_loop_postprocess is not original
-    assert install_trajectory_finalize_bridge(Manager) is False
+    original = Worker._agent_loop_postprocess
+    assert install_trajectory_finalize_bridge(
+        Worker, audio_token_id_resolver=lambda _processor, _kind: 99,
+    )
+    assert Worker._audioenv_trajectory_bridge is True
+    assert Worker._agent_loop_postprocess is not original
+    assert install_trajectory_finalize_bridge(
+        Worker, audio_token_id_resolver=lambda _processor, _kind: 99,
+    ) is False
+
+
+def test_verl_v1_queue_worker_finalizes_before_batch_insertion(tmp_path: Path, monkeypatch):
+    import torch
+
+    audio_path = tmp_path / "caller.wav"
+    audio_path.write_bytes(_wav())
+    draft = {
+        "schema_version": "audioenv.native-rollout-draft/v1",
+        "experiment_id": "exp", "environment_hash": "a" * 64,
+        "verifier_hash": "b" * 64, "reward_version": "tau2-v1",
+        "task_id": "0", "episode_id": "episode", "seed": 7,
+        "model_id": "qwen", "checkpoint_id": "base",
+        "policy_version": "policy@verl-step-1",
+        "terminal_reward": 1.0, "process_reward": 0.0,
+        "truncated": False, "truncation_reason": None,
+        "audio_paths": [str(audio_path)], "actions": [{"kind": "tool"}],
+    }
+
+    class Worker:
+        processor = object()
+
+        async def _agent_loop_postprocess(self, output, validate, **kwargs):
+            del validate, kwargs
+            assert output.extra_fields["audioenv_trajectory"]["policy_version"] == (
+                "policy@verl-step-1"
+            )
+            return "queued"
+
+        def _compute_multi_modal_inputs(self, output, input_ids):
+            del output, input_ids
+            return {"audio_values": torch.tensor([1.0])}
+
+        def _compute_position_ids(self, input_ids, attention_mask, multi_modal_inputs):
+            del attention_mask, multi_modal_inputs
+            width = int(input_ids.shape[-1])
+            return torch.tensor([[list(range(width))] * 4])
+
+    monkeypatch.setenv("AUDIOENV_TRAJECTORY_DIR", str(tmp_path / "traces"))
+    assert install_trajectory_finalize_bridge(
+        Worker, audio_token_id_resolver=lambda _processor, _kind: 99,
+    )
+    output = SimpleNamespace(
+        prompt_ids=[99, 99, 2], response_ids=[3], response_mask=[1],
+        response_logprobs=[-0.1], multi_modal_data={"audios": [str(audio_path)]},
+        extra_fields={"audioenv_rollout_draft": draft},
+    )
+    result = asyncio.run(Worker()._agent_loop_postprocess(output, False, raw_prompt=[]))
+    assert result == "queued"
+    assert output.extra_fields["audioenv_trajectory"]["turns"][0]["position_ids"] == [
+        [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3],
+    ]
+    assert len(tuple((tmp_path / "traces").glob("trajectory-*.jsonl"))) == 1
 
 
 class _RunPodTransport:

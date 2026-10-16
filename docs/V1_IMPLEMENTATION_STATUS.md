@@ -324,6 +324,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   manager method is truly replaced exactly once; previously only the
   standalone finalizer was tested and unreachable installation statements
   left the real hook inactive.
+- Pinned-source inspection then showed that VeRL V1 actually queues rollouts
+  through `AgentLoopWorkerTQ`, not the legacy manager. The hook now targets
+  that concrete worker, derives multimodal positions with its own processor,
+  finalizes before queue insertion, and is exercised by an executable fake-V1
+  worker test. Invalid lineage therefore cannot enter the trainer queue.
 - Multi-turn finalization now resolves caller-audio spans across the complete
   flattened prompt and masked response sequence. Later caller observations are
   mask-zero context, but remain traceably bound to their audio artifacts;
@@ -392,7 +397,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-173 passed
+174 passed
 
 uv run audioenv validate
 389 passed, 0 failed

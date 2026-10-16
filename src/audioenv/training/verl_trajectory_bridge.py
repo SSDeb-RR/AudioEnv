@@ -13,39 +13,55 @@ from typing import Any
 from ..contracts import AudioArtifactV1, MultimodalFeatureRefV1, TrainingTurnV2, TrajectoryV2
 
 
-def install_trajectory_finalize_bridge(manager_class=None) -> bool:
-    """Patch the pinned manager once so exported traces use trained positions."""
+def install_trajectory_finalize_bridge(worker_class=None, *, audio_token_id_resolver=None) -> bool:
+    """Patch VeRL V1's queue worker so traces use processor-derived positions."""
 
-    if manager_class is None:
-        from verl.experimental.agent_loop.agent_loop import AgentLoopManager
+    if worker_class is None:
+        from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopWorkerTQ
 
-        manager_class = AgentLoopManager
-    if getattr(manager_class, "_audioenv_trajectory_bridge", False):
+        worker_class = AgentLoopWorkerTQ
+    if getattr(worker_class, "_audioenv_trajectory_bridge", False):
         return False
-    original = manager_class._agent_loop_postprocess
+    original = worker_class._agent_loop_postprocess
+    if audio_token_id_resolver is None:
+        from verl.experimental.agent_loop.agent_loop import get_processor_token_id
+
+        audio_token_id_resolver = get_processor_token_id
 
     async def postprocess(self, output, validate, **kwargs):
-        internal = await original(self, output, validate, **kwargs)
-        draft = output.extra_fields.get("audioenv_rollout_draft")
-        if draft is not None:
-            from verl.experimental.agent_loop.agent_loop import get_processor_token_id
+        outputs = output if isinstance(output, list) else [output]
+        for item in outputs:
+            draft = item.extra_fields.get("audioenv_rollout_draft")
+            if draft is None:
+                continue
+            import torch
 
+            prompt_ids = tuple(item.prompt_ids)
+            response_ids = tuple(item.response_ids)
+            input_ids = torch.tensor(prompt_ids + response_ids, dtype=torch.int64)
+            attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
+            multi_modal_inputs = self._compute_multi_modal_inputs(item, input_ids)
+            positions = self._compute_position_ids(
+                input_ids.unsqueeze(0), attention_mask.unsqueeze(0), multi_modal_inputs,
+            )
             trajectory = finalize_native_trajectory(
                 draft=draft,
-                prompt_ids=tuple(output.prompt_ids),
-                response_ids=tuple(output.response_ids),
-                response_mask=tuple(output.response_mask),
-                response_logprobs=tuple(output.response_logprobs or ()),
-                padded_position_ids=internal.position_ids,
-                prompt_width=int(internal.prompt_ids.shape[-1]),
-                audio_token_id=get_processor_token_id(self.processor, "audio"),
+                prompt_ids=prompt_ids,
+                response_ids=response_ids,
+                response_mask=tuple(item.response_mask),
+                response_logprobs=tuple(item.response_logprobs or ()),
+                padded_position_ids=positions,
+                prompt_width=len(prompt_ids),
+                audio_token_id=audio_token_id_resolver(self.processor, "audio"),
             )
-            internal.extra_fields["audioenv_trajectory"] = trajectory.model_dump(mode="json")
+            item.extra_fields["audioenv_trajectory"] = trajectory.model_dump(mode="json")
             _persist_trajectory(trajectory)
-        return internal
+        # Finalize before queue insertion: invalid lineage must never enter a
+        # training batch. The pinned TQ worker returns None after writing.
+        return await original(self, output, validate, **kwargs)
 
-    manager_class._agent_loop_postprocess = postprocess
-    manager_class._audioenv_trajectory_bridge = True
+    worker_class._agent_loop_postprocess = postprocess
+    worker_class._audioenv_trajectory_bridge = True
     return True
 
 
@@ -123,7 +139,11 @@ def _select_unpadded_positions(values: Any, prompt_width: int, prompt_length: in
     indices = list(range(prompt_width - prompt_length, prompt_width)) + list(
         range(prompt_width, prompt_width + response_length)
     )
-    tensor = values[0] if hasattr(values, "ndim") and values.ndim >= 2 else values
+    tensor = values
+    if hasattr(tensor, "ndim") and tensor.ndim == 3:
+        if int(tensor.shape[0]) != 1:
+            raise ValueError("position data must contain exactly one rollout row")
+        tensor = tensor[0]
     if hasattr(tensor, "ndim") and tensor.ndim == 2:
         return tuple(tuple(int(channel[index]) for index in indices) for channel in tensor)
     return tuple(int(tensor[index]) for index in indices)

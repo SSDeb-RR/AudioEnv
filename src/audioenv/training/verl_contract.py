@@ -29,9 +29,10 @@ def validate_verl_runtime_contract(
     missing = sorted(REQUIRED_OUTPUT_FIELDS - fields)
     if missing:
         raise RuntimeError("VeRL AgentLoopOutput is missing: " + ", ".join(missing))
-    manager = agent_module.AgentLoopManager
-    if not inspect.iscoroutinefunction(manager._agent_loop_postprocess):
-        raise RuntimeError("VeRL AgentLoopManager._agent_loop_postprocess must remain async")
+    queue_module = importer("verl.trainer.ppo.v1.agent_loop_tq")
+    queue_worker = queue_module.AgentLoopWorkerTQ
+    if not inspect.iscoroutinefunction(queue_worker._agent_loop_postprocess):
+        raise RuntimeError("VeRL V1 AgentLoopWorkerTQ._agent_loop_postprocess must remain async")
     registry = agent_module._agent_loop_registry
     importer("audioenv.training.verl_plugin")
     registered = registry.get("audioenv_agent")
@@ -39,7 +40,7 @@ def validate_verl_runtime_contract(
         raise RuntimeError("AudioEnv agent loop did not register with pinned VeRL")
     bridges = None
     if require_runtime_bridges:
-        bridges = _validate_runtime_bridges(importer, manager)
+        bridges = _validate_runtime_bridges(importer, queue_worker)
 
     if object_loader is None:
         object_loader = importer("verl.utils.import_utils").load_extern_object
@@ -82,9 +83,9 @@ def validate_verl_runtime_contract(
     return report
 
 
-def _validate_runtime_bridges(importer: Callable[[str], Any], manager: type) -> dict[str, bool]:
+def _validate_runtime_bridges(importer: Callable[[str], Any], queue_worker: type) -> dict[str, bool]:
     checks = {
-        "trajectory_postprocessor": bool(getattr(manager, "_audioenv_trajectory_bridge", False)),
+        "trajectory_postprocessor": bool(getattr(queue_worker, "_audioenv_trajectory_bridge", False)),
         "native_thinker_talker": bool(getattr(
             importer("verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server").VLLMOmniAsyncServer,
             "_audioenv_native_bridge", False,

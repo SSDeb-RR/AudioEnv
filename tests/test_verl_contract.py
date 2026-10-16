@@ -15,6 +15,11 @@ class _Manager:
         return None
 
 
+class _QueueWorker:
+    async def _agent_loop_postprocess(self):
+        return None
+
+
 class _RewardManager:
     pass
 
@@ -50,13 +55,15 @@ def _runtime(*, missing: str | None = None, register: bool = True, bridges: bool
             if register:
                 registry["audioenv_agent"] = {"_target_": "audioenv.training.verl_plugin.AudioEnvVerlAgentLoop"}
             if bridges:
-                _Manager._audioenv_trajectory_bridge = True
+                _QueueWorker._audioenv_trajectory_bridge = True
                 _NativeServer._audioenv_native_bridge = True
                 _FSDPEngine._audioenv_gradient_audit = True
                 _PPOTrainer._audioenv_logprob_audit = True
             return SimpleNamespace()
         if name == "verl.experimental.reward_loop.reward_manager":
             return rewards
+        if name == "verl.trainer.ppo.v1.agent_loop_tq":
+            return SimpleNamespace(AgentLoopWorkerTQ=_QueueWorker)
         if name == "verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server":
             return SimpleNamespace(VLLMOmniAsyncServer=_NativeServer)
         if name == "verl.workers.engine.fsdp.transformer_impl":
