@@ -34,7 +34,16 @@ test("create project, train, reload, compare, and export", async ({ page }) => {
   await page.goto("/artifacts");
   await expect(page.getByRole("link", { name: "Download" }).first()).toBeVisible();
   await page.goto("/evaluations");
-  await expect(page.getByText(/24 samples/).first()).toBeVisible();
+  await expect(page.locator(".comparison p").first()).toContainText("24 samples");
+  await expect(page.getByText("Learning-evidence assessment")).toBeVisible();
+  await expect(page.getByLabel("Primary comparison")).toHaveValue(/.+/);
+  await expect(page.getByLabel("Independent comparison")).toHaveValue("");
+  await page.getByRole("button", { name: "Assess learning evidence" }).click();
+  await expect(page.getByText(/Learning evidence · (incomplete|unmet)/)).toBeVisible();
+  await expect(page.getByText("independent condition", { exact: true })).toBeVisible();
+  await expect(page.getByText("reward parity", { exact: true })).toBeVisible();
+  await expect(page.getByText("speech quality non regression", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download evidence report" })).toBeVisible();
   await page.locator(".table a.tr").first().click();
   await expect(page.getByText("Protocol bindings")).toBeVisible();
   await expect(page.getByText("Environment hash")).toBeVisible();

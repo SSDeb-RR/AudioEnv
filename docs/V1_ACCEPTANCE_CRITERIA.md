@@ -55,7 +55,7 @@ reported as a preview, not AudioEnv V1 complete.
 | Dashboard dependency audit | PASS | `npm audit` reported zero vulnerabilities |
 | Dashboard production build | PASS | TypeScript and Vite build completed |
 | One-command local startup | PASS | `audioenv app --data-dir ...` applied migrations and served bundled SPA plus API from an isolated wheel install without Node |
-| Dashboard product flow | PASS | Six Playwright flows cover project-to-comparison execution with checkpoint resume and continued step numbering, repository/model Foundry onboarding, persisted model probe/conformance evidence, RunPod configuration with real `max_steps` through the live-quote boundary, persisted Modal estimate review, and local-CUDA configuration through the machine-preflight boundary |
+| Dashboard product flow | PASS | Six Playwright flows cover project-to-comparison execution with checkpoint resume and continued step numbering, primary/independent/parity evidence controls, server-side gate assessment and report download, repository/model Foundry onboarding, persisted model probe/conformance evidence, RunPod configuration with real `max_steps` through the live-quote boundary, persisted Modal estimate review, and local-CUDA configuration through the machine-preflight boundary |
 | Codex authoring boundary | PASS | Fake-runner test proves read-only/schema-constrained invocation, secret redaction, deterministic validation, and review-gated output without making a paid call |
 | Persisted local workflow | PASS | 30-step subprocess run completed with 92 persisted metrics, checkpoint/manifest artifacts, two evaluations, and one paired comparison |
 | CPU parameter update | PASS | Initial and final parameter hashes differ; checkpoint reload reproduces the trained result |

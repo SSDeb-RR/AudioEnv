@@ -84,6 +84,12 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   measurements. Missing evidence produces `incomplete`, failed requirements
   produce `unmet`, and only a complete passing report becomes
   `production_eligible`; the result is content-addressed.
+- The Evaluations dashboard exposes dedicated selectors for the primary
+  comparison, a same-experiment independent comparison, and a verified
+  reward-parity artifact. It invokes the protected server-side assessment,
+  renders every gate's requirement and observed value, and provides the
+  persisted content-addressed evidence report for download. Missing inputs
+  remain visibly `incomplete` rather than being replaced with UI defaults.
 - Every evaluation row opens a detail view showing its checkpoint, environment,
   verifier, and protocol hashes, exact evaluation configuration, and persisted
   per-task/audio-profile/seed outcomes. Aggregate claims are therefore
@@ -472,4 +478,5 @@ audioenv_foundry-0.5.0 wheel and sdist built
 The product-flow gates cover project creation, resource selection, preflight,
 explicit launch, worker completion, real parameter updates, checkpoint reload,
 two held-out evaluations, compatible paired comparison, artifact download
-exposure, and SPA deep-link serving.
+exposure, learning-evidence selection and gate reporting, evidence-report
+download, and SPA deep-link serving.

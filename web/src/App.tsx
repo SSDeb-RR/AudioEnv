@@ -19,6 +19,8 @@ type Log = { id:number; level:string; message:string; payload:Record<string,unkn
 type Artifact = { id:string; experiment_id:string; kind:string; media_type:string; size_bytes:number; download_url:string; metadata:Record<string,unknown> };
 type Evaluation = { id:string; experiment_id:string; checkpoint_id:string; environment_hash:string; verifier_hash:string; protocol_hash:string; split:string; config:Record<string,unknown>; metrics:{success_rate:number;success_ci_low:number;success_ci_high:number;kind:string;checkpoint_reload_verified?:boolean}; samples?:{task_id:string;audio_profile_id:string;seed:number;passed:boolean;reward:number;[key:string]:unknown}[] };
 type Comparison = { id:string; experiment_id:string; baseline_evaluation_id:string; trained_evaluation_id:string; result:{compatible:boolean;paired_sample_count:number;baseline_success_rate:number;trained_success_rate:number;paired_delta:number;paired_ci_low:number;paired_ci_high:number} };
+type LearningGateCheck = { name:string; status:"pass"|"fail"|"incomplete"; requirement:string; observed:string };
+type LearningEvidenceResponse = { artifact:Artifact; evidence:{ schema_version:string; status:"validated"|"unmet"|"incomplete"; claim:string; production_eligible:boolean; primary_comparison:Comparison["result"]; independent_comparison:Comparison["result"]|null; checks:LearningGateCheck[] } };
 type Overview = { total_experiments:number; active_runs:number; failed_runs:number; recent:Experiment[]; compute_cost_usd:number|null };
 type FoundryBuild = { id:string; project_id:string; kind:string; source_uri:string; status:string; report:Record<string,any>; generated_artifact_ids:string[]; environment_id:string|null; model_id:string|null; created_at:string };
 type Harness = { id:string; kind:string; display_name:string; status:string; status_reason:string; capabilities:string[]; requires:string[] };
@@ -159,7 +161,51 @@ function EnvironmentsPage(){ const client=useQueryClient();const query=useQuery(
 function BenchmarksPage(){ const envs=useQuery({queryKey:["environments"],queryFn:()=>getJson<EnvironmentRecord[]>("/api/environments")});return <><Header eyebrow="Task sources" title="Benchmarks & tasks" description="Frozen source revisions, task counts, and split manifests."/><section className="panel"><div className="benchmark"><Database/><div><b>Reference V2 acceptance corpus</b><p>32 train · 8 validation · 8 test. Entity values, task IDs, and evaluation seeds are disjoint.</p></div><Status value="available"/></div><div className="benchmark"><Database/><div><b>τ² retail v1.0.1</b><p>Pinned at fc0055dc…; isolated Python 3.12 worker and protected reference-reward parity are verified.</p></div><Status value="available"/></div><small>{envs.data?.length??0} registered environment versions</small></section></>;
 }
 
-function EvaluationsPage(){ const evals=useQuery({queryKey:["evaluations"],queryFn:()=>getJson<Evaluation[]>("/api/evaluations")});const comps=useQuery({queryKey:["comparisons"],queryFn:()=>getJson<Comparison[]>("/api/comparisons")});return <><Header eyebrow="Held-out evidence" title="Evaluations" description="Only protocol-compatible baseline and trained results can be compared."/>{comps.data?.map(c=><section className="panel" key={c.id}><div className="panel-head"><h2>Comparison {c.id.slice(0,8)}</h2><Status value={c.result.compatible?"compatible":"blocked"}/></div><ComparisonView comparison={c.result}/></section>)}<section className="panel table"><div className="tr heading"><span>Evaluation</span><span>Kind</span><span>Success</span></div>{evals.data?.map(e=><Link className="tr" to={`/evaluations/${e.id}`} key={e.id}><span><b>{e.id.slice(0,8)}</b><small>{e.protocol_hash?.slice(0,12)}</small></span><span>{e.metrics.kind}</span><span>{pct(e.metrics.success_rate)}</span></Link>)}</section></>;
+function EvaluationsPage(){
+  const client=useQueryClient();
+  const evals=useQuery({queryKey:["evaluations"],queryFn:()=>getJson<Evaluation[]>("/api/evaluations")});
+  const comps=useQuery({queryKey:["comparisons"],queryFn:()=>getJson<Comparison[]>("/api/comparisons")});
+  const artifacts=useQuery({queryKey:["artifacts"],queryFn:()=>getJson<Artifact[]>("/api/artifacts")});
+  const [primaryId,setPrimaryId]=useState(""); const [independentId,setIndependentId]=useState(""); const [parityId,setParityId]=useState("");
+  const compatible=comps.data?.filter(item=>item.result.compatible)??[];
+  const primary=compatible.find(item=>item.id===(primaryId||compatible[0]?.id));
+  const independentOptions=compatible.filter(item=>item.id!==primary?.id&&item.experiment_id===primary?.experiment_id);
+  const independent=independentOptions.find(item=>item.id===independentId);
+  const parityOptions=(artifacts.data??[]).filter(item=>item.kind==="reward-parity-report"&&item.experiment_id===primary?.experiment_id);
+  const assess=useMutation({
+    mutationFn:()=>postJson<LearningEvidenceResponse>(`/api/experiments/${primary!.experiment_id}/learning-evidence`,{
+      baseline_evaluation_id:primary!.baseline_evaluation_id,
+      trained_evaluation_id:primary!.trained_evaluation_id,
+      independent_baseline_evaluation_id:independent?.baseline_evaluation_id||null,
+      independent_trained_evaluation_id:independent?.trained_evaluation_id||null,
+      reward_parity_artifact_id:parityId||null,
+    }),
+    onSuccess:()=>client.invalidateQueries({queryKey:["artifacts"]}),
+  });
+  const choosePrimary=(value:string)=>{setPrimaryId(value);setIndependentId("");setParityId("");assess.reset();};
+  return <>
+    <Header eyebrow="Held-out evidence" title="Evaluations" description="Select protocol-compatible evidence, run the protected learning gate, and inspect every claim requirement."/>
+    <section className="panel evidence-panel">
+      <div className="panel-head"><div><h2>Learning-evidence assessment</h2><p>The server verifies primary lift, independent transfer, safety, reward parity, and speech quality before allowing a learning claim.</p></div>{assess.data&&<Status value={assess.data.evidence.status}/>}</div>
+      {primary?<>
+        <div className="evidence-controls">
+          <label>Primary comparison<select aria-label="Primary comparison" value={primary.id} onChange={event=>choosePrimary(event.target.value)}>{compatible.map(item=><option key={item.id} value={item.id}>{item.id.slice(0,8)} · {item.result.paired_sample_count} samples · {pct(item.result.paired_delta)} delta</option>)}</select></label>
+          <label>Independent comparison<select aria-label="Independent comparison" value={independentId} onChange={event=>{setIndependentId(event.target.value);assess.reset();}}><option value="">Not supplied</option>{independentOptions.map(item=><option key={item.id} value={item.id}>{item.id.slice(0,8)} · {pct(item.result.paired_delta)} delta</option>)}</select></label>
+          <label>Reward parity evidence<select aria-label="Reward parity evidence" value={parityId} onChange={event=>{setParityId(event.target.value);assess.reset();}}><option value="">Not supplied</option>{parityOptions.map(item=><option key={item.id} value={item.id}>{item.id.slice(0,12)}</option>)}</select></label>
+          <button disabled={assess.isPending} onClick={()=>assess.mutate()}>{assess.isPending?"Assessing…":"Assess learning evidence"}</button>
+        </div>
+        <small className="evidence-note">Missing independent, parity, or speech-quality evidence is reported as incomplete—never inferred or fabricated.</small>
+      </>:<Empty title="No compatible comparison" body="Complete a baseline and trained held-out evaluation under the same protocol first."/>}
+      {assess.isError&&<div className="alert"><TriangleAlert size={16}/>{String(assess.error)}</div>}
+      {assess.data&&<div className="evidence-report">
+        <div className="evidence-summary"><div><span>Decision</span><b>Learning evidence · {assess.data.evidence.status}</b><small>{assess.data.evidence.claim}</small></div><div><span>Production eligible</span><b>{assess.data.evidence.production_eligible?"Yes":"No"}</b></div><a href={assess.data.artifact.download_url}>Download evidence report</a></div>
+        <div className="evidence-checks"><div className="evidence-row heading"><span>Gate</span><span>Status</span><span>Requirement</span><span>Observed</span></div>{assess.data.evidence.checks.map(check=><div className="evidence-row" key={check.name}><b>{check.name.replaceAll("_"," ")}</b><Status value={check.status}/><span>{check.requirement}</span><span>{check.observed}</span></div>)}</div>
+        <details><summary>Comparison evidence</summary><pre>{JSON.stringify({primary:assess.data.evidence.primary_comparison,independent:assess.data.evidence.independent_comparison},null,2)}</pre></details>
+      </div>}
+    </section>
+    {comps.data?.map(c=><section className="panel" key={c.id}><div className="panel-head"><h2>Comparison {c.id.slice(0,8)}</h2><Status value={c.result.compatible?"compatible":"blocked"}/></div><ComparisonView comparison={c.result}/></section>)}
+    <section className="panel table"><div className="tr heading"><span>Evaluation</span><span>Kind</span><span>Success</span></div>{evals.data?.map(e=><Link className="tr" to={`/evaluations/${e.id}`} key={e.id}><span><b>{e.id.slice(0,8)}</b><small>{e.protocol_hash?.slice(0,12)}</small></span><span>{e.metrics.kind}</span><span>{pct(e.metrics.success_rate)}</span></Link>)}</section>
+  </>;
 }
 
 function EvaluationDetailPage(){
