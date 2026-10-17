@@ -38,30 +38,46 @@ class HarborContainerTransport(Protocol):
 
 
 class DockerHarborTransport:
-    """Rootless-Docker transport with no runtime network or host socket."""
+    """Rootless OCI transport with no runtime network or host socket.
+
+    Docker remains the preferred Linux runtime. Rootless Podman is accepted as
+    an equivalent OCI boundary, which also makes real validation possible on a
+    macOS Podman machine without installing a privileged Docker daemon.
+    """
+
+    @staticmethod
+    def _runtime() -> str | None:
+        return shutil.which("docker") or shutil.which("podman")
 
     def probe(self) -> tuple[str, ...]:
-        docker = shutil.which("docker")
-        if docker is None:
-            return ("docker is unavailable",)
+        runtime = self._runtime()
+        if runtime is None:
+            return ("rootless Docker or Podman is unavailable",)
         try:
-            process = subprocess.run(
-                [docker, "info", "--format", "{{json .SecurityOptions}}"],
-                capture_output=True, text=True, timeout=15, check=False,
+            command = (
+                [runtime, "info", "--format", "{{.Host.Security.Rootless}}"]
+                if Path(runtime).name == "podman"
+                else [runtime, "info", "--format", "{{json .SecurityOptions}}"]
             )
+            process = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
         except (OSError, subprocess.SubprocessError) as exc:
-            return (f"docker probe failed: {exc}",)
+            return (f"OCI runtime probe failed: {exc}",)
         if process.returncode:
-            return ("docker daemon is unavailable",)
-        if "rootless" not in process.stdout.lower():
-            return ("rootless Docker is required for untrusted Harbor validation",)
+            return (f"{Path(runtime).name} service is unavailable",)
+        rootless = (
+            process.stdout.strip().casefold() == "true"
+            if Path(runtime).name == "podman"
+            else "rootless" in process.stdout.casefold()
+        )
+        if not rootless:
+            return ("rootless Docker or Podman is required for untrusted Harbor validation",)
         return ()
 
     def build(self, *, task: HarborTaskBundle, image_tag: str, policy: SandboxPolicyV1) -> None:
         reasons = self.probe()
         if reasons:
             raise RuntimeError("; ".join(reasons))
-        docker = shutil.which("docker") or "docker"
+        docker = self._runtime() or "docker"
         process = subprocess.run(
             [docker, "build", "--network", "bridge" if policy.network == "bootstrap-only" else "none", "--tag", image_tag,
              "--file", str(task.dockerfile), str(task.dockerfile.parent)],
@@ -98,7 +114,7 @@ class DockerHarborTransport:
             f"set -eu; cp -a {shlex.quote(source_dir)}/. {shlex.quote(workspace)}/; "
             f"{fixture_command}; {verifier_command}"
         )
-        docker = shutil.which("docker") or "docker"
+        docker = self._runtime() or "docker"
         args = [
             docker, "run", "--rm", "--init", "--network", "none", "--read-only",
             "--user", "65532:65532", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",

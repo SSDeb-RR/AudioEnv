@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -140,6 +141,43 @@ def test_harbor_validator_rejects_source_mutation_after_import(tmp_path: Path):
 def test_real_docker_probe_is_truthful():
     reasons = DockerHarborTransport().probe()
     assert isinstance(reasons, tuple)
+
+
+def test_harbor_transport_accepts_verified_rootless_podman(monkeypatch):
+    from audioenv.integrations import harbor_sandbox
+
+    monkeypatch.setattr(
+        harbor_sandbox.shutil, "which",
+        lambda name: "/usr/bin/podman" if name == "podman" else None,
+    )
+    calls = []
+
+    def run(command, **kwargs):
+        del kwargs
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="true\n")
+
+    monkeypatch.setattr(harbor_sandbox.subprocess, "run", run)
+
+    assert DockerHarborTransport().probe() == ()
+    assert calls == [["/usr/bin/podman", "info", "--format", "{{.Host.Security.Rootless}}"]]
+
+
+def test_harbor_transport_rejects_rootful_podman(monkeypatch):
+    from audioenv.integrations import harbor_sandbox
+
+    monkeypatch.setattr(
+        harbor_sandbox.shutil, "which",
+        lambda name: "/usr/bin/podman" if name == "podman" else None,
+    )
+    monkeypatch.setattr(
+        harbor_sandbox.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="false\n"),
+    )
+
+    assert DockerHarborTransport().probe() == (
+        "rootless Docker or Podman is required for untrusted Harbor validation",
+    )
 
 
 def test_harbor_hash_binds_all_build_context_files(tmp_path: Path):

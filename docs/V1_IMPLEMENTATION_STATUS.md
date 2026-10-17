@@ -202,8 +202,11 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   hashes rather than returns private output, verifies state isolation and
   source/verifier immutability, and automatically signs and promotes only when
   all hard gates pass. Fake-container tests exercise the complete lifecycle;
-  this Mac has no rootless Docker runtime, so real untrusted-container
-  acceptance remains unrun and the endpoint fails closed here.
+  the transport accepts either verified rootless Docker or verified rootless
+  Podman and rejects rootful/unavailable services. A rootless Podman 6.1.4
+  machine was provisioned on this Mac, but its service did not remain
+  reachable after VM startup; real untrusted-container acceptance therefore
+  remains unrun and the endpoint continues to fail closed here.
 - Harbor promotion also rejects mutable `FROM` images, remote `ADD` sources,
   and secret, SSH, or bind build mounts before invoking the container
   transport, preventing generated tasks from weakening image reproducibility
@@ -462,7 +465,7 @@ hardware, credentials, or approval; `missing` means no implementation exists.
 
 ```text
 uv run --extra dev --extra platform --extra train pytest -q
-191 passed
+193 passed
 
 uv run audioenv validate
 389 passed, 0 failed
