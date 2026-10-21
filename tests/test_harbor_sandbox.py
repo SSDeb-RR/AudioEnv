@@ -180,6 +180,53 @@ def test_harbor_transport_rejects_rootful_podman(monkeypatch):
     )
 
 
+def test_harbor_trial_prepares_writable_non_root_workspace(tmp_path, monkeypatch):
+    from audioenv.contracts import SandboxPolicyV1
+    from audioenv.integrations import harbor_sandbox
+
+    _, bundles = _fixture(tmp_path)
+    task = bundles[0]
+    calls = []
+
+    transport = DockerHarborTransport()
+    monkeypatch.setattr(transport, "probe", lambda: ())
+    monkeypatch.setattr(transport, "_runtime", lambda: "docker")
+
+    def run(command, **kwargs):
+        del kwargs
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(harbor_sandbox.subprocess, "run", run)
+
+    result = transport.trial(
+        task=task,
+        image_tag="audioenv-harbor:test",
+        mode="oracle",
+        policy=SandboxPolicyV1(),
+    )
+
+    assert result.exit_code == 0
+    command = calls[0]
+    shell_command = command[-1]
+    assert "cp -R /app/. /workspace/" in shell_command
+    assert "cp -a" not in shell_command
+
+    tmpfs_values = [
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == "--tmpfs"
+    ]
+    assert any(
+        value.startswith("/workspace:") and "mode=1777" in value
+        for value in tmpfs_values
+    )
+    assert any(
+        value.startswith("/tmp:") and "mode=1777" in value
+        for value in tmpfs_values
+    )
+
+
 def test_harbor_hash_binds_all_build_context_files(tmp_path: Path):
     first, _ = _fixture(tmp_path)
     extra = tmp_path / "tasks" / "fix-one" / "environment" / "app.txt"

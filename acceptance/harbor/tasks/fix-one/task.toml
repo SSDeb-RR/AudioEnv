@@ -1,0 +1,10 @@
+id = "fix-one"
+split = "test"
+license = "Apache-2.0"
+
+[audioenv]
+workspace = "/workspace"
+source_dir = "/app"
+verifier_command = "sh /tests/test.sh"
+oracle_command = "sh /fixture/solve.sh"
+adversarial_command = "sh /fixture/wrong.sh"

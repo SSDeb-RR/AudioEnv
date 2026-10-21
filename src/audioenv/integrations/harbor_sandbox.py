@@ -111,7 +111,7 @@ class DockerHarborTransport:
             or (f"sh /fixture/{fixture.name}" if fixture is not None else "true")
         )
         command = (
-            f"set -eu; cp -a {shlex.quote(source_dir)}/. {shlex.quote(workspace)}/; "
+            f"set -eu; cp -R {shlex.quote(source_dir)}/. {shlex.quote(workspace)}/; "
             f"{fixture_command}; {verifier_command}"
         )
         docker = self._runtime() or "docker"
@@ -121,8 +121,8 @@ class DockerHarborTransport:
             "--pids-limit", str(policy.pid_limit), "--cpus", str(policy.cpu_limit),
             "--memory", f"{policy.memory_mb}m", "--workdir", workspace,
             "--mount", f"type=bind,src={task.verifier.parent.resolve()},dst=/tests,readonly",
-            "--tmpfs", f"{workspace}:rw,nosuid,size={max(64, policy.memory_mb // 2)}m",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
+            "--tmpfs", f"{workspace}:rw,nosuid,mode=1777,size={max(64, policy.memory_mb // 2)}m",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,mode=1777,size=256m",
         ]
         if fixture is not None:
             args.extend(("--mount", f"type=bind,src={fixture.parent.resolve()},dst=/fixture,readonly"))
