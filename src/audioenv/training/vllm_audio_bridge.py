@@ -25,10 +25,10 @@ def install_native_audio_bridge(server_class=None) -> bool:
 
     if server_class is None:
         from verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server import (
-            VLLMOmniAsyncServer,
+            vLLMOmniHttpServer,
         )
 
-        server_class = VLLMOmniAsyncServer
+        server_class = vLLMOmniHttpServer
     if getattr(server_class, "_audioenv_native_bridge", False):
         return False
 

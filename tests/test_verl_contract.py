@@ -65,7 +65,7 @@ def _runtime(*, missing: str | None = None, register: bool = True, bridges: bool
         if name == "verl.trainer.ppo.v1.agent_loop_tq":
             return SimpleNamespace(AgentLoopWorkerTQ=_QueueWorker)
         if name == "verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server":
-            return SimpleNamespace(VLLMOmniAsyncServer=_NativeServer)
+            return SimpleNamespace(vLLMOmniHttpServer=_NativeServer)
         if name == "verl.workers.engine.fsdp.transformer_impl":
             return SimpleNamespace(FSDPEngine=_FSDPEngine)
         if name == "verl.trainer.ppo.v1.trainer_base":

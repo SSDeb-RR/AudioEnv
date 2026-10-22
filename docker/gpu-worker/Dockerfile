@@ -48,7 +48,7 @@ RUN mkdir -p /opt/audioenv/checkouts/verl-omni /opt/audioenv/checkouts/tau2 \
     && git -C /opt/audioenv/checkouts/tau2 fetch --depth 1 origin "$TAU2_COMMIT" \
     && git -C /opt/audioenv/checkouts/tau2 checkout --detach FETCH_HEAD \
     && test "$(git -C /opt/audioenv/checkouts/tau2 rev-parse HEAD)" = "$TAU2_COMMIT"
-RUN python -m pip install --no-cache-dir \
+RUN uv pip install --python /opt/audioenv/venv/bin/python --torch-backend=auto \
       "vllm==${VLLM_VERSION}" \
       "kernels==${KERNELS_VERSION}" \
       liger-kernel \

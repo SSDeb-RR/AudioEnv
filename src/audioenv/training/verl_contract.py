@@ -87,7 +87,7 @@ def _validate_runtime_bridges(importer: Callable[[str], Any], queue_worker: type
     checks = {
         "trajectory_postprocessor": bool(getattr(queue_worker, "_audioenv_trajectory_bridge", False)),
         "native_thinker_talker": bool(getattr(
-            importer("verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server").VLLMOmniAsyncServer,
+            importer("verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server").vLLMOmniHttpServer,
             "_audioenv_native_bridge", False,
         )),
         "lora_gradient_audit": bool(getattr(

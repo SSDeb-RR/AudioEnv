@@ -28,6 +28,7 @@ def test_gpu_image_keeps_ssh_pod_idle_and_contains_attested_source_checkouts():
     assert '"vllm==${VLLM_VERSION}"' in dockerfile
     assert '"kernels==${KERNELS_VERSION}"' in dockerfile
     assert "liger-kernel" in dockerfile
+    assert "--torch-backend=auto" in dockerfile
     assert "RUN audioenv-verl-contract-check" in dockerfile
 
 
