@@ -3,6 +3,7 @@ from pathlib import Path
 
 WORKFLOW = Path(".github/workflows/gpu-worker-image.yml")
 DOCKERFILE = Path("docker/gpu-worker/Dockerfile")
+DEPENDENCY_CHECK = Path("docker/gpu-worker/check_dependencies.py")
 CUDA_DIGEST = "sha256:36c66a3ad4608580cf937f7ec3add9323a610956cfe8c9e2f99ef2ea0c896f01"
 
 
@@ -49,12 +50,16 @@ def test_gpu_worker_bootstraps_pinned_python_312_before_dependency_install():
 def test_gpu_worker_preserves_wheel_name_and_rejects_dependency_conflicts():
     source = DOCKERFILE.read_text()
 
-    assert "ARG ACCELERATE_VERSION=1.12.0" in source
     assert "COPY ${AUDIOENV_WHEEL} /tmp/audioenv-wheels/" in source
     assert "/tmp/audioenv-wheels/*.whl" in source
     assert "/tmp/audioenv.whl" not in source
-    constraints = source.index("pip-constraints.txt")
     verl_omni = source.index('"verl-omni[audio] @ git+')
-    pip_check = source.index("python -m pip check")
+    pip_check = source.index("python /opt/audioenv/check_dependencies.py")
     environment_lock = source.index("python -m pip freeze --all")
-    assert constraints < verl_omni < pip_check < environment_lock
+    assert verl_omni < pip_check < environment_lock
+
+    check = DEPENDENCY_CHECK.read_text()
+    assert 'EXPECTED_VLLM_OMNI_VERSION = "0.24.1.dev26+gfe478a95a"' in check
+    assert "MINIMUM_ACCELERATE_VERSION = (1, 14, 0)" in check
+    assert '[sys.executable, "-m", "pip", "check"]' in check
+    assert "unexpected dependency-check result" in check

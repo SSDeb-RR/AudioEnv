@@ -210,3 +210,10 @@ in version control, invokes the same `build.sh` contract (including
 to the registry digest. Running this workflow builds and publishes an image;
 it never calls RunPod or provisions paid compute. The package must be made
 public before RunPod can pull it without registry credentials.
+
+The pinned VeRL-Omni revision deliberately overrides one stale dependency
+declaration in its pinned vLLM-Omni revision: VeRL-Omni requires
+`accelerate>=1.14.0`, while vLLM-Omni metadata still says
+`accelerate==1.12.0`. `check_dependencies.py` accepts only that exact,
+version-bound upstream conflict and fails the image for every additional
+`pip check` result. The runtime contract check remains a separate build gate.
