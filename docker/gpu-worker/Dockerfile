@@ -9,6 +9,12 @@ ARG TAU2_COMMIT=fc0055dc4e0a316c3f83133267fbd6faaa770992
 
 RUN test -n "$AUDIOENV_WHEEL" && test -n "$VERL_OMNI_COMMIT" \
     && test -n "$VERL_COMMIT" && test -n "$VLLM_OMNI_COMMIT" && test -n "$TAU2_COMMIT"
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      ca-certificates \
+      git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git --version
 COPY ${AUDIOENV_WHEEL} /tmp/audioenv.whl
 COPY docker/gpu-worker/dependencies.lock.json /opt/audioenv/dependencies.lock.json
 RUN mkdir -p /opt/audioenv/checkouts/verl-omni /opt/audioenv/checkouts/tau2 \

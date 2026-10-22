@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 WORKFLOW = Path(".github/workflows/gpu-worker-image.yml")
+DOCKERFILE = Path("docker/gpu-worker/Dockerfile")
 CUDA_DIGEST = "sha256:36c66a3ad4608580cf937f7ec3add9323a610956cfe8c9e2f99ef2ea0c896f01"
 
 
@@ -20,3 +21,13 @@ def test_gpu_image_workflow_is_manual_pinned_and_non_provisioning():
     assert "registry_digest" in source
     assert "api.runpod" not in source.casefold()
     assert "create_pod" not in source
+
+
+def test_gpu_worker_installs_git_before_fetching_pinned_sources():
+    source = DOCKERFILE.read_text()
+
+    install = source.index("apt-get install")
+    git_probe = source.index("git --version")
+    first_checkout = source.index("git -C /opt/audioenv/checkouts/verl-omni init")
+    assert install < git_probe < first_checkout
+    assert "ca-certificates" in source[install:first_checkout]
