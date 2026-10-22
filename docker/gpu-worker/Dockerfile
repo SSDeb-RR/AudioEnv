@@ -6,15 +6,32 @@ ARG VERL_OMNI_COMMIT=49dedb6ec0691588494b629fc1b610a86612966b
 ARG VERL_COMMIT=8a694930275061f52ebd538c906ef8819af56dbd
 ARG VLLM_OMNI_COMMIT=fe478a95ab39e80085da06e3401c3ed471898a57
 ARG TAU2_COMMIT=fc0055dc4e0a316c3f83133267fbd6faaa770992
+ARG UV_VERSION=0.9.7
+ARG UV_SHA256=b26fcc8dfa1c39b5a5613445af3be3eefda45d9a39359bee271eafe34913583e
+ARG PYTHON_VERSION=3.12.11
 
 RUN test -n "$AUDIOENV_WHEEL" && test -n "$VERL_OMNI_COMMIT" \
     && test -n "$VERL_COMMIT" && test -n "$VLLM_OMNI_COMMIT" && test -n "$TAU2_COMMIT"
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates \
+      curl \
       git \
     && rm -rf /var/lib/apt/lists/* \
     && git --version
+RUN curl --fail --location --show-error --silent \
+      "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+      --output /tmp/uv.tar.gz \
+    && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum --check --strict \
+    && tar --extract --gzip --file /tmp/uv.tar.gz --directory /tmp \
+    && install --mode 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv \
+    && rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu \
+    && UV_PYTHON_INSTALL_DIR=/opt/audioenv/python uv python install "$PYTHON_VERSION" \
+    && UV_PYTHON_INSTALL_DIR=/opt/audioenv/python uv venv \
+      --python "$PYTHON_VERSION" --seed /opt/audioenv/venv \
+    && /opt/audioenv/venv/bin/python -c \
+      'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+ENV PATH="/opt/audioenv/venv/bin:${PATH}"
 COPY ${AUDIOENV_WHEEL} /tmp/audioenv.whl
 COPY docker/gpu-worker/dependencies.lock.json /opt/audioenv/dependencies.lock.json
 RUN mkdir -p /opt/audioenv/checkouts/verl-omni /opt/audioenv/checkouts/tau2 \
