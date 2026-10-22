@@ -202,3 +202,11 @@ Pod remains alive; every provider supplies the complete worker command and
 cannot accidentally combine it with a duplicate image entrypoint.
 Building and publishing the release image remains blocked until a CUDA base
 digest is selected and the image passes the GPU acceptance suite.
+
+The manual `GPU worker image` GitHub Actions workflow provides the release
+build boundary on an AMD64 runner. It fixes the approved CUDA manifest digest
+in version control, invokes the same `build.sh` contract (including
+`audioenv-verl-contract-check`), publishes to GHCR, and uploads a receipt bound
+to the registry digest. Running this workflow builds and publishes an image;
+it never calls RunPod or provisions paid compute. The package must be made
+public before RunPod can pull it without registry credentials.

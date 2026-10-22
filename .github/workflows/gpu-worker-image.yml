@@ -1,0 +1,112 @@
+name: GPU worker image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: gpu-worker-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-publish:
+    name: Build and publish AMD64 worker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CUDA_BASE_IMAGE: nvidia/cuda:13.0.2-cudnn-devel-ubuntu22.04@sha256:36c66a3ad4608580cf937f7ec3add9323a610956cfe8c9e2f99ef2ea0c896f01
+      IMAGE_REPOSITORY: ghcr.io/ssdeb-rr/audioenv-gpu
+    steps:
+      - name: Check out the frozen source revision
+        uses: actions/checkout@v4
+
+      - name: Verify AMD64 release runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          docker version
+
+      - name: Build the AudioEnv wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check uv
+          uv build
+          test -f dist/audioenv_foundry-0.5.0-py3-none-any.whl
+
+      - name: Authenticate to GitHub Container Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and contract-check the immutable worker
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="${IMAGE_REPOSITORY}:sha-${GITHUB_SHA}"
+          docker/gpu-worker/build.sh \
+            "$CUDA_BASE_IMAGE" \
+            dist/audioenv_foundry-0.5.0-py3-none-any.whl \
+            "$image_tag" \
+            dist/gpu-worker-image-receipt.json
+          printf 'image_tag=%s\n' "$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish and bind the registry digest
+        id: publish
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE_TAG"
+          docker buildx imagetools inspect "$IMAGE_TAG" \
+            > dist/gpu-worker-registry-inspect.txt
+          registry_digest="$(awk '/^Digest:/ {print $2; exit}' \
+            dist/gpu-worker-registry-inspect.txt)"
+          [[ "$registry_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          python3 - "$IMAGE_TAG" "$registry_digest" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          path = Path("dist/gpu-worker-image-receipt.json")
+          receipt = json.loads(path.read_text())
+          receipt["registry_image"] = sys.argv[1]
+          receipt["registry_digest"] = sys.argv[2]
+          receipt["registry_reference"] = f"{sys.argv[1].split(':sha-', 1)[0]}@{sys.argv[2]}"
+          path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          PY
+          printf 'registry_digest=%s\n' "$registry_digest" >> "$GITHUB_OUTPUT"
+          printf 'registry_reference=%s@%s\n' \
+            "$IMAGE_REPOSITORY" "$registry_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Publish build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-worker-image-${{ github.sha }}
+          path: |
+            dist/gpu-worker-image-receipt.json
+            dist/gpu-worker-registry-inspect.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize the immutable image
+        shell: bash
+        env:
+          REGISTRY_REFERENCE: ${{ steps.publish.outputs.registry_reference }}
+        run: |
+          {
+            echo '## AudioEnv GPU worker image'
+            echo
+            echo "- Source commit: \`${GITHUB_SHA}\`"
+            echo "- CUDA base: \`${CUDA_BASE_IMAGE}\`"
+            echo "- Registry reference: \`${REGISTRY_REFERENCE}\`"
+            echo '- RunPod resources created: `no`'
+          } >> "$GITHUB_STEP_SUMMARY"
