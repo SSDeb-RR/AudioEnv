@@ -9,6 +9,7 @@ ARG TAU2_COMMIT=fc0055dc4e0a316c3f83133267fbd6faaa770992
 ARG UV_VERSION=0.9.7
 ARG UV_SHA256=b26fcc8dfa1c39b5a5613445af3be3eefda45d9a39359bee271eafe34913583e
 ARG PYTHON_VERSION=3.12.11
+ARG ACCELERATE_VERSION=1.12.0
 
 RUN test -n "$AUDIOENV_WHEEL" && test -n "$VERL_OMNI_COMMIT" \
     && test -n "$VERL_COMMIT" && test -n "$VLLM_OMNI_COMMIT" && test -n "$TAU2_COMMIT"
@@ -32,7 +33,7 @@ RUN curl --fail --location --show-error --silent \
     && /opt/audioenv/venv/bin/python -c \
       'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 ENV PATH="/opt/audioenv/venv/bin:${PATH}"
-COPY ${AUDIOENV_WHEEL} /tmp/audioenv.whl
+COPY ${AUDIOENV_WHEEL} /tmp/audioenv-wheels/
 COPY docker/gpu-worker/dependencies.lock.json /opt/audioenv/dependencies.lock.json
 RUN mkdir -p /opt/audioenv/checkouts/verl-omni /opt/audioenv/checkouts/tau2 \
     && git -C /opt/audioenv/checkouts/verl-omni init \
@@ -49,10 +50,12 @@ RUN python -m pip install --no-cache-dir \
       "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_COMMIT}" \
     && python -m pip install --no-cache-dir \
       "verl @ git+https://github.com/verl-project/verl.git@${VERL_COMMIT}" \
-    && python -m pip install --no-cache-dir \
+    && printf 'accelerate==%s\n' "$ACCELERATE_VERSION" > /opt/audioenv/pip-constraints.txt \
+    && python -m pip install --no-cache-dir --constraint /opt/audioenv/pip-constraints.txt \
       "verl-omni[audio] @ git+https://github.com/verl-project/verl-omni.git@${VERL_OMNI_COMMIT}" \
       "tau2 @ git+https://github.com/sierra-research/tau2-bench.git@${TAU2_COMMIT}" \
-    && python -m pip install --no-cache-dir /tmp/audioenv.whl \
+    && python -m pip install --no-cache-dir /tmp/audioenv-wheels/*.whl \
+    && python -m pip check \
     && python -m pip freeze --all | LC_ALL=C sort > /opt/audioenv/python-environment.lock \
     && test -s /opt/audioenv/python-environment.lock
 

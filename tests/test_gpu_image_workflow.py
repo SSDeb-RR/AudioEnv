@@ -44,3 +44,17 @@ def test_gpu_worker_bootstraps_pinned_python_312_before_dependency_install():
     dependency_install = source.index('"vllm-omni @ git+')
     assert python_probe < dependency_install
     assert 'ENV PATH="/opt/audioenv/venv/bin:${PATH}"' in source
+
+
+def test_gpu_worker_preserves_wheel_name_and_rejects_dependency_conflicts():
+    source = DOCKERFILE.read_text()
+
+    assert "ARG ACCELERATE_VERSION=1.12.0" in source
+    assert "COPY ${AUDIOENV_WHEEL} /tmp/audioenv-wheels/" in source
+    assert "/tmp/audioenv-wheels/*.whl" in source
+    assert "/tmp/audioenv.whl" not in source
+    constraints = source.index("pip-constraints.txt")
+    verl_omni = source.index('"verl-omni[audio] @ git+')
+    pip_check = source.index("python -m pip check")
+    environment_lock = source.index("python -m pip freeze --all")
+    assert constraints < verl_omni < pip_check < environment_lock
