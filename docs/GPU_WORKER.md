@@ -175,8 +175,9 @@ embedded version against the dependency lock, and passes every upstream commit
 to Docker from that lock rather than relying on Dockerfile defaults. It labels
 the image with the wheel and lock SHA-256 values, captures Docker's immutable
 local image ID, and writes all of those identities and release pins to the
-versioned JSON receipt. The wrapper is covered with a fake-Docker contract test;
-this host has not performed the CUDA image build.
+versioned JSON receipt. The wrapper is covered with a fake-Docker contract test.
+GitHub Actions run `39747815437` also built the AMD64 image, executed the
+pinned dependency and VeRL bridge contracts, and published it to GHCR.
 
 The local Docker image ID is a content identity for that local image, but it is
 not a pushed registry manifest digest. Publishing must separately record the
@@ -200,8 +201,12 @@ use those exact paths. Tau2 is installed in the worker rather than merely
 named in the receipt. The image defaults to `sleep infinity` so an SSH-managed
 Pod remains alive; every provider supplies the complete worker command and
 cannot accidentally combine it with a duplicate image entrypoint.
-Building and publishing the release image remains blocked until a CUDA base
-digest is selected and the image passes the GPU acceptance suite.
+The published build is
+`ghcr.io/ssdeb-rr/audioenv-gpu@sha256:7c25d71104883f8194b0626df286462d3a1a536c12e1dfc5f8eaf6e11da6d26e`.
+An anonymous registry manifest request returned HTTP 200, and its config reports
+`linux/amd64`, user `audioenv`, and `sleep infinity`. This proves image
+readiness, not GPU acceptance: no NVIDIA device, Qwen checkpoint, or optimizer
+step was exercised during the GitHub-hosted build.
 
 The manual `GPU worker image` GitHub Actions workflow provides the release
 build boundary on an AMD64 runner. It fixes the approved CUDA manifest digest

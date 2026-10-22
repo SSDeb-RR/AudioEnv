@@ -399,8 +399,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   `pkg://` protected reward loader, protected component weighting, and `naive`
   reward-manager registration. Worker preflight repeats the check and records
   its evidence; any upstream API drift fails before model loading or training.
-  The two pinned repositories were also inspected at their recorded commits,
-  but the image-level command still awaits a real Docker/CUDA image build.
+  GitHub Actions run `39747815437` built this contract on AMD64 and published
+  the digest-bound image after the check passed. This was an image build, not a
+  GPU execution or Qwen acceptance run.
 - That image-build command now forces native integration mode and verifies the
   active markers for Thinker/Talker output binding, trajectory finalization,
   LoRA-gradient auditing, and log-probability parity. Missing or drifted patch
@@ -409,9 +410,9 @@ hardware, credentials, or approval; `missing` means no implementation exists.
   dependency lock, sources every upstream build argument from that lock,
   attaches wheel/lock SHA-256 labels, and emits a versioned receipt containing
   the immutable local Docker image ID and all release pins. Contract tests use
-  fake Docker and also reject wheel-version drift. A local image ID is not
-  misrepresented as a pushed registry digest; both the real CUDA build and
-  registry publication remain external gates.
+  fake Docker and also reject wheel-version drift. The published receipt binds
+  registry digest `sha256:7c25d71104883f8194b0626df286462d3a1a536c12e1dfc5f8eaf6e11da6d26e`;
+  anonymous manifest retrieval and its AMD64/non-root config were verified.
 - RunPod has REST v2 quote/provision/state/stop methods bound to the current
   canonical `https://api.runpod.io/v2` contract. Catalog requests explicitly
   request Secure Pod availability for eight GPUs and parse v2 `memory`,
