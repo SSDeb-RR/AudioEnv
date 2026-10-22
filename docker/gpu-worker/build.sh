@@ -27,11 +27,14 @@ if [[ ! -f $lock ]]; then
   exit 2
 fi
 
-IFS=$'\t' read -r audioenv_version verl_omni_commit verl_commit vllm_omni_commit tau2_commit < <(
+IFS=$'\t' read -r audioenv_version verl_omni_commit verl_commit vllm_version kernels_version vllm_omni_commit tau2_commit < <(
   python3 - "$lock" <<'PY'
 import json, pathlib, sys
 lock = json.loads(pathlib.Path(sys.argv[1]).read_text())
-keys = ("audioenv_version", "verl_omni_commit", "verl_commit", "vllm_omni_commit", "tau2_commit")
+keys = (
+    "audioenv_version", "verl_omni_commit", "verl_commit", "vllm_version",
+    "kernels_version", "vllm_omni_commit", "tau2_commit",
+)
 values = [lock.get(key) for key in keys]
 if not all(isinstance(value, str) and value for value in values):
     raise SystemExit("dependency lock is missing required release pins")
@@ -70,6 +73,8 @@ docker build \
   --build-arg "AUDIOENV_WHEEL=$wheel" \
   --build-arg "VERL_OMNI_COMMIT=$verl_omni_commit" \
   --build-arg "VERL_COMMIT=$verl_commit" \
+  --build-arg "VLLM_VERSION=$vllm_version" \
+  --build-arg "KERNELS_VERSION=$kernels_version" \
   --build-arg "VLLM_OMNI_COMMIT=$vllm_omni_commit" \
   --build-arg "TAU2_COMMIT=$tau2_commit" \
   --label "org.opencontainers.image.source=https://github.com/SSDeb-RR/AudioEnv" \
@@ -86,12 +91,14 @@ if [[ ! $image_id =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 mkdir -p "$(dirname "$receipt")"
 python3 - "$receipt" "$tag" "$image_id" "$base_image" "$lock_sha" "$wheel_sha" \
-  "$audioenv_version" "$verl_omni_commit" "$verl_commit" "$vllm_omni_commit" "$tau2_commit" <<'PY'
+  "$audioenv_version" "$verl_omni_commit" "$verl_commit" "$vllm_version" "$kernels_version" \
+  "$vllm_omni_commit" "$tau2_commit" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 keys = (
     "image", "image_id", "base_image", "dependency_lock_sha256", "wheel_sha256",
-    "audioenv_version", "verl_omni_commit", "verl_commit", "vllm_omni_commit", "tau2_commit",
+    "audioenv_version", "verl_omni_commit", "verl_commit", "vllm_version", "kernels_version",
+    "vllm_omni_commit", "tau2_commit",
 )
 payload = {"schema_version": "audioenv.gpu-worker-image-receipt/v1", **dict(zip(keys, sys.argv[2:], strict=True))}
 path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

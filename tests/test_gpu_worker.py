@@ -25,6 +25,9 @@ def test_gpu_image_keeps_ssh_pod_idle_and_contains_attested_source_checkouts():
     assert "/opt/audioenv/checkouts/verl-omni" in dockerfile
     assert "/opt/audioenv/checkouts/tau2" in dockerfile
     assert '"tau2 @ git+https://github.com/sierra-research/tau2-bench.git@${TAU2_COMMIT}"' in dockerfile
+    assert '"vllm==${VLLM_VERSION}"' in dockerfile
+    assert '"kernels==${KERNELS_VERSION}"' in dockerfile
+    assert "liger-kernel" in dockerfile
     assert "RUN audioenv-verl-contract-check" in dockerfile
 
 
@@ -276,6 +279,8 @@ def test_gpu_image_builder_binds_lock_wheel_and_image_id_in_receipt(tmp_path: Pa
     assert f"VERL_OMNI_COMMIT={payload['verl_omni_commit']}" in docker_args
     assert f"VERL_COMMIT={payload['verl_commit']}" in docker_args
     assert f"VLLM_OMNI_COMMIT={payload['vllm_omni_commit']}" in docker_args
+    assert f"VLLM_VERSION={payload['vllm_version']}" in docker_args
+    assert f"KERNELS_VERSION={payload['kernels_version']}" in docker_args
     assert f"TAU2_COMMIT={payload['tau2_commit']}" in docker_args
     assert f"ai.audioenv.wheel-sha256={payload['wheel_sha256']}" in docker_args
     assert (

@@ -4,6 +4,8 @@ FROM ${BASE_IMAGE}
 ARG AUDIOENV_WHEEL
 ARG VERL_OMNI_COMMIT=49dedb6ec0691588494b629fc1b610a86612966b
 ARG VERL_COMMIT=8a694930275061f52ebd538c906ef8819af56dbd
+ARG VLLM_VERSION=0.24.0
+ARG KERNELS_VERSION=0.14.1
 ARG VLLM_OMNI_COMMIT=fe478a95ab39e80085da06e3401c3ed471898a57
 ARG TAU2_COMMIT=fc0055dc4e0a316c3f83133267fbd6faaa770992
 ARG UV_VERSION=0.9.7
@@ -47,6 +49,10 @@ RUN mkdir -p /opt/audioenv/checkouts/verl-omni /opt/audioenv/checkouts/tau2 \
     && git -C /opt/audioenv/checkouts/tau2 checkout --detach FETCH_HEAD \
     && test "$(git -C /opt/audioenv/checkouts/tau2 rev-parse HEAD)" = "$TAU2_COMMIT"
 RUN python -m pip install --no-cache-dir \
+      "vllm==${VLLM_VERSION}" \
+      "kernels==${KERNELS_VERSION}" \
+      liger-kernel \
+    && python -m pip install --no-cache-dir \
       "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_COMMIT}" \
     && python -m pip install --no-cache-dir \
       "verl @ git+https://github.com/verl-project/verl.git@${VERL_COMMIT}" \
